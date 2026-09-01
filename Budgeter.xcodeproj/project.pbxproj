@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		3DC219CE3047047B0053F6DE /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 3DC219CC3047047B0053F6DE /* GRDB */; };
+		3DC219CF3047047B0053F6DE /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = 3DC219CD3047047B0053F6DE /* GRDB */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		3DE309A9304685D700825653 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3DC219CE3047047B0053F6DE /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -59,6 +65,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3DC219CF3047047B0053F6DE /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +119,7 @@
 			);
 			name = Budgeter;
 			packageProductDependencies = (
+				3DC219CC3047047B0053F6DE /* GRDB */,
 			);
 			productName = Budgeter;
 			productReference = 3DE3099B304685D500825653 /* Budgeter.app */;
@@ -135,6 +143,7 @@
 			);
 			name = BudgeterTests;
 			packageProductDependencies = (
+				3DC219CD3047047B0053F6DE /* GRDB */,
 			);
 			productName = BudgeterTests;
 			productReference = 3DE309A8304685D700825653 /* BudgeterTests.xctest */;
@@ -195,6 +204,9 @@
 			);
 			mainGroup = 3DE30992304685D500825653;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				3DC219CB3047047B0053F6DE /* XCRemoteSwiftPackageReference "GRDB" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3DE3099C304685D500825653 /* Products */;
 			projectDirPath = "";
@@ -578,6 +590,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		3DC219CB3047047B0053F6DE /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		3DC219CC3047047B0053F6DE /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3DC219CB3047047B0053F6DE /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+		3DC219CD3047047B0053F6DE /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3DC219CB3047047B0053F6DE /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 3DE30993304685D500825653 /* Project object */;
 }
