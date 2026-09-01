@@ -1,0 +1,14 @@
+included:
+  - Budgeter
+  - BudgeterTests
+  - BudgeterUITests
+
+opt_in_rules:
+  - empty_count
+  - force_unwrapping
+
+disabled_rules:
+  - todo
+  - static_over_final_class # false positive on `override class var` (can't override with `static`)
+
+line_length: 120

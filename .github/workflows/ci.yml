@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install SwiftLint & SwiftFormat
+        run: brew install swiftlint swiftformat
+
+      - name: SwiftFormat (lint only, no changes)
+        run: swiftformat --lint .
+
+      - name: SwiftLint
+        run: swiftlint lint --strict
+
+      - name: Pick an available iOS Simulator
+        id: destination
+        run: |
+          NAME=$(xcrun simctl list devices available iOS -j | python3 -c "
+          import json, sys
+          devices = json.load(sys.stdin)['devices']
+          runtimes = sorted(k for k, v in devices.items() if 'iOS' in k and v)
+          latest = runtimes[-1]
+          print(devices[latest][0]['name'])
+          ")
+          echo "Using simulator: $NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: >
+          xcodebuild build
+          -project Budgeter.xcodeproj
+          -scheme Budgeter
+          -destination "platform=iOS Simulator,name=${{ steps.destination.outputs.name }}"
+
+      - name: Test
+        run: >
+          xcodebuild test
+          -project Budgeter.xcodeproj
+          -scheme Budgeter
+          -destination "platform=iOS Simulator,name=${{ steps.destination.outputs.name }}"
