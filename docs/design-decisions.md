@@ -676,6 +676,120 @@ A bundled Australian starter list (Woolworths, Coles, Ampol) would solve cold-st
 
 ---
 
+## DEC-033 — Reverting DEC-032 now that a Mac exists
+
+**Context** — DEC-032 superseded DEC-001 on a single hardware fact: no Mac was available. That fact has changed — the development machine is now a Mac. DEC-032 said explicitly, at the time: *"DEC-001 is superseded, not deleted; it remains the correct decision for anyone holding a Mac."* This decision exercises that clause.
+
+**Options considered**
+- (a) Revert to DEC-001/DEC-003 as originally written: SwiftUI, Swift, GRDB, no Expo layer
+- (b) Stay on the Expo/React Native path from DEC-032, even with a Mac available
+
+**Choice** — (a). Revert. SwiftUI + Swift + GRDB, local only. Xcode replaces Expo/EAS/TestFlight-via-cloud-build as the toolchain.
+
+**Reasoning**
+
+1. *The constraint that motivated DEC-032 is gone.* DEC-032's entire argument was the feedback-loop cost of building native UI with no local compiler. With a Mac, that cost doesn't exist — Xcode Previews and the simulator restore the fast loop DEC-032 was compensating for.
+2. *DEC-001's original reasoning was never wrong, only inapplicable.* iOS-only still removes the entire case for a cross-platform runtime, and App Intents (Wallet capture, Sprint 7) and WidgetKit (Sprint 9) are still Swift-native frameworks. DEC-032 itself flagged both as harder, blinder, and cloud-build-only under RN — a cost paid for a constraint that no longer applies.
+3. *Nothing in the schema or invariants moves.* DEC-032 already established that DEC-003's SQL invariants are toolchain-independent; GRDB is simply the tool DEC-003 always preferred over `expo-sqlite`, now unblocked.
+4. *Deployability is at least as good, not worse.* Native SwiftUI is the standard, best-supported path to the App Store — no Expo/EAS account dependency, no RN bridge layer to maintain long-term. This matters more now that goal 3 ("possibly a real product later") is back in view.
+
+**Consequences** — Every RN-specific item in the roadmap and open items below reverts: `expo-sqlite` → GRDB, `FlashList` → `UICollectionView`-wrapped `List` (per DEC-001's original consequence, only if row counts warrant it), `AppState` → `willResignActive`, the Expo config-plugin App Intents wrapper → a normal native App Intents extension target, TanStack Query → GRDB `ValueObservation`. The reactivity and privacy-overlay open items DEC-032 introduced are closed by this reversion, not resolved by prototyping — they were only open because of the RN constraint. `Money` becomes a Swift value type again (invariant 1 unchanged in substance, per DEC-001). Whether the Apple Developer Program enrollment stays mandatory is revisited separately — see DEC-034.
+
+---
+
+## DEC-034 — Deferring the Apple Developer Program
+
+**Options considered**
+- Enroll now (as DEC-032 assumed), sign with a paid team, distribute via TestFlight
+- Defer enrollment. Sign with a free Apple ID (personal team), install directly from Xcode to one's own phone
+
+**Choice** — Defer. Free Apple ID, direct Xcode install, no TestFlight, for as long as the app stays single-device and personal.
+
+**Reasoning** — Goal 1 ("a tool I use every day") only requires the app running on the owner's own phone, which free provisioning does at no cost. DEC-032 assumed paid enrollment was non-optional because *that plan* routed distribution through TestFlight (itself a consequence of having no local compiler at all under React Native). With native Xcode now in place, that reason no longer applies — Xcode can install straight to a paired device without any account tier. The features that do require a paid team — CloudKit/iCloud, Push Notifications, Sign in with Apple — are all things DEC-002 and DEC-021 already rejected for this app. App Groups and WidgetKit, both needed later (Sprint 7, Sprint 9), work under free provisioning.
+
+**Consequences** — Free-provisioned apps carry a 7-day provisioning-profile expiry: after that window the app refuses to launch until reinstalled from Xcode, which means the phone needs to meet the Mac (USB or same wifi network) roughly weekly. Acceptable friction for a single-owner, single-device app; revisit if the app is ever handed to a second person, put on a second device, or needs a capability that turns out to require a paid team.
+
+---
+
+# 9. Income and payday
+
+## DEC-035 — Income representation
+
+**Context** — Nothing in this document modelled income. `spending` (DEC-010) and `postings` (DEC-028) were both written assuming expenses and transfers are all there is. DEC-036 requires the user to record what they were paid, so income needs a representation before that feature has anywhere to write.
+
+**Options considered**
+- `kind = 'income'` on the transactions table, `category_id` forced NULL by CHECK, excluded from `spending`, expanded as one positive posting in `postings`
+- A normal transaction with an inverted sign in a reserved "Income" category
+- A separate `income` table
+- A transfer (DEC-028) from a phantom external "Employer" account
+
+**Choice** — `kind = 'income'`, alongside `'expense'` and `'transfer'`. `category_id IS NULL` by CHECK, no splits, excluded from `spending`, one positive posting in `postings`.
+
+**Reasoning**
+
+A reserved category is the tempting cheap answer and it is the one that breaks. The `spending` view is the entire enforcement mechanism for invariant 2 and rule 1; making its correctness depend on a *row* the user can rename, delete, merge or reuse turns a constraint back into a convention, which the brief forbids. Category management is user territory (DEC-030) and always will be.
+
+Sign inversion inside `transactions` is worse than it looks. Once one row's amount means the opposite of another's, every aggregate must know which sign it is holding, and a single mis-signed row corrupts category totals and account balances simultaneously — with nothing structural to catch it. Sign belongs where DEC-028 already put it: in `postings`, which exists precisely to be the signed expansion.
+
+A separate table fails for the same reason DEC-010 rejected a separate drafts table, and harder. Sprint 6 imports bank CSVs, and a bank CSV contains salary credits, so income is *ingested* data — it must flow through the single upsert funnel (rule 3) and be visible to the cross-source matcher (DEC-016). A second table means a second write path and a UNION on every dedupe check.
+
+The phantom-employer transfer is the ledger-purist answer, and it is genuinely elegant: DEC-028's expansion already balances. It is rejected because DEC-028's transfer semantics are explicitly "between own accounts" — an employer account is not the user's, would appear in account pickers, and would accumulate an ever-more-negative balance that means nothing to anybody. Fabricating accounts to preserve double-entry purity in a single-user budgeting app is cost without a payer.
+
+**Consequences**
+
+- The `kind` CHECK becomes `IN ('expense','transfer','income')`, in **migration 001** — Sprint 1, before any data exists. This is the sprint-ordering principle applied literally: a third `kind` is free now and a data migration later.
+- `CHECK`: income rows have `category_id IS NULL` and may not have splits. The DEC-029 split trigger is unaffected.
+- `spending` gains a fourth clause: `kind = 'expense'`. Stated positively — **spending is expenses only**, not "everything that isn't a transfer".
+- `postings` gains an income case: one positive posting on `account_id`.
+- Amounts stay unsigned in `transactions`. Sign is a `postings` concern, as it already was for transfers.
+- **The budget screen does not change.** The budgeting model is per-category caps, not envelope and not zero-based (locked before the design session), so income funds nothing and allocates nothing. It moves a balance and records a fact.
+- Income participates in dedupe like any other row, which means a manually entered payday and an imported salary credit can and will collide. That is the DEC-016–019 matcher's job, and it now has income rows in scope — see open items.
+
+---
+
+## DEC-036 — Payday reminders
+
+**Context** — The app is structurally blind to income. Bank sync is deferred indefinitely (CDR accreditation not held), and Wallet capture (DEC-010–015) sees card spending only; a salary credit never touches it. Nothing in the system can observe that the user was paid. If income is to be recorded at all, the user must be asked, and the app must choose a moment to ask.
+
+**Options considered**
+- A local notification on a **separate** pay schedule, tapping through to a blank income form
+- The same, but derived from DEC-007's budget anchor with no separate schedule
+- No notification at all — a persistent "log your pay" card in the ledger once a payday has passed
+- Auto-create the income row on payday from a stored expected amount
+
+**Choice** — A local notification on a pay schedule stored independently of the budget anchor: `pay_anchor` (local DATE), `pay_cadence` (weekly/fortnightly/monthly), and a reminder time-of-day. Off until enabled. Tapping opens a blank income entry form; nothing is written until the user saves. The in-app card is kept as the fallback, not as the mechanism.
+
+**Reasoning**
+
+*Why a separate schedule.* Pay rhythm and budget rhythm are the same thing by default and not by definition. DEC-007/DEC-008 make cadence a changeable, forward-dated budgeting decision — and a user switching from fortnightly to monthly budgeting has not changed jobs. One field serving both purposes guarantees that one of the two is wrong the instant they diverge, and the wrongness is silent in both directions: a reminder that fires on the wrong day, or a budget period retimed by a payroll change. Onboarding pre-fills `pay_anchor`/`pay_cadence` from the DEC-007 answers, so the cost is a confirm step on an already-filled form, not a second interrogation.
+
+*Why a notification is justified here when DEC-011 rejected one.* DEC-011 refused per-capture alerts because they are frequent, redundant with the lock-screen alert Wallet itself just posted, and would be switched off within a week. A payday reminder inverts all three: at most 52 a year and typically 26, duplicated by nothing, and fired at the one moment the app genuinely cannot observe for itself. The rationing principle is upheld, not overturned — this is the app's *only* scheduled notification, and the daily draft digest (DEC-011) remains the only other one in the design.
+
+*Why the app must not fill in the amount.* Pay varies — hours, overtime, leave loading, a tax threshold change — so a stored "expected amount" writes a number nobody checked into account balances, and when the balance later looks wrong there is no way to find the row that lied. That is DEC-012's argument verbatim, and it applies here with less excuse: capture drafts at least come from a real card tap, whereas a projected salary comes from nothing at all. The app never guesses on the user's behalf.
+
+*Mechanism.* `UNUserNotificationCenter` local notifications. **This requires no paid Apple Developer Program membership and no entitlement.** DEC-034 lists Push Notifications among the paid-team features this app does not need; that refers to APNs, and local scheduling is unrelated. Recorded explicitly because the two are conflated constantly and DEC-034 would otherwise read as blocking this feature.
+
+iOS offers a repeating `UNCalendarNotificationTrigger` that can express "every Thursday" and "the 15th of every month", but **there is no way to express a 14-day cycle** — the one cadence most Australian salaries actually use. Fortnightly must therefore be a rolling queue of discrete one-shot triggers, topped up whenever the app launches. iOS caps pending notifications at 64 per app; a year of fortnightly pay is 26, so scheduling roughly a year ahead fits comfortably.
+
+All three cadences use that same rolling queue, rather than repeating triggers for two of them and a queue for the third. One code path is worth more than the saved scheduling calls: monthly-on-the-31st then reuses the DEC-007 clamping rule instead of trusting calendar matching to do something defensible in February, and the queue is refilled lazily on launch for exactly the DEC-009 reason — `BGTaskScheduler` runs when iOS chooses, and "why didn't this fire" is not a debugging session worth having twice.
+
+Pay dates are stored as local DATEs plus a time-of-day, never as instants (rule 6). Which dates the queue *should* contain, given an anchor, a cadence and today, is a pure function and belongs in the testable core alongside `generatePeriods`.
+
+*Content and privacy.* DEC-025's concern is what is legible before unlock. The notification carries no amount by construction — it exists to ask for one — but it does disclose pay timing, so the body names no employer, no account and no figure: "Payday — log what you were paid". Whether previews are shown on a locked screen is an iOS-level user setting the app cannot control, which is exactly why the content must be safe unconditionally rather than conditionally.
+
+*Drift.* Australian payroll pays early ahead of weekends and public holidays, so a one- or two-day miss is normal, not a bug. The notification carries a **"Remind me tomorrow"** action that reschedules a single one-shot; it never moves `pay_anchor`. Changing the anchor stays an explicit settings action, forward-dated, per DEC-007's governing principle.
+
+**Consequences**
+
+- New settings: pay anchor, pay cadence, reminder time, enabled flag. Disabled by default and offered during onboarding, pre-filled from the DEC-007 answers.
+- Notification permission is requested at the moment the user enables the reminder, never at first launch — DEC-024's consent precedent.
+- Denied or later revoked permission must degrade rather than break: the ledger card ("no pay logged since 14 March") shows regardless of notification state, and is the only thing standing between a permission prompt the user declined and a feature that silently does nothing.
+- **Free provisioning interacts badly, and this is not a reason to change either decision.** Pending notifications are held by the system and still fire, but under DEC-034's 7-day profile expiry the app itself refuses to launch, so the notification arrives and tapping it does nothing until the phone next meets the Mac. Recorded so it is diagnosed once rather than twice.
+- Scheduling behaviour is device-only — the simulator proves nothing useful and full verification needs a real payday. The pure date-queue function must therefore be a plain unit test off-device, leaving only the thin `UNUserNotificationCenter` binding unverified.
+- The reminder tells the user *that* payday arrived. It never checks *how much* — reconciling actual pay against expected pay is a different feature and is not in v1.
+
+---
+
 # Open items
 
 | Item | Status | Resolution path |
@@ -685,8 +799,10 @@ A bundled Australian starter list (Woolworths, Coles, Ampol) would solve cold-st
 | Bundled starter merchant list (DEC-030) | Deferred | Revisit if cold-start categorisation proves painful |
 | Unallocated split remainder (DEC-029) | Rejected for v1 | Revisit only with a concrete need |
 | `Money` value type design | Locked by invariant 1, not grilled | Integer minor units + currency code, explicit arithmetic, property-tested |
-| SQLite→UI reactivity mechanism (DEC-032) | New, unresolved | GRDB `ValueObservation` has no RN equivalent. Decide in Sprint 3 against a real ledger screen; do not pick before there is something to observe. |
-| Privacy overlay fidelity under React Native (DEC-032) | Unverified assumption | Verify `AppState` `inactive` fires early enough to beat the iOS app-switcher screenshot, on a physical device, in Sprint 9 |
+| SQLite→UI reactivity mechanism (DEC-032) | Closed by DEC-033 | GRDB `ValueObservation` drives SwiftUI directly, as DEC-003 always intended. No longer open. |
+| Privacy overlay fidelity (DEC-032) | Closed by DEC-033 | Native `willResignActive` (DEC-025), not `AppState`. Still verify on a physical device in Sprint 9 as routine QA, not as a research risk. |
+| Income vs. imported salary credit dedupe (DEC-035) | Open | Sprint 6 brings salary lines in by CSV; confirm the DEC-016 matcher scores income rows sensibly before trusting it |
+| Pay-date drift around weekends and public holidays (DEC-036) | Accepted, unmodelled | The snooze action absorbs 1–2 days; revisit only if a quarter of real paydays shows systematic drift |
 
 ---
 
@@ -702,3 +818,4 @@ Extracted for quick reference, because these are the ones that produce silent co
 6. **Period boundaries are local DATEs, never instants.** (DEC-009)
 7. **Drafts never count toward the authoritative spending number, and are never auto-confirmed.** (DEC-012)
 8. **`Money` cannot conform to `TelemetrySafe`.** (DEC-022)
+9. **Income is never spending and never carries a category.** `spending` reads `kind = 'expense'` only. (DEC-035)
