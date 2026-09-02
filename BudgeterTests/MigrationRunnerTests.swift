@@ -26,11 +26,15 @@ struct MigrationRunnerTests {
         }
 
         try queue.read { db in
-            for table in ["accounts", "categories", "transactions", "change_counter"] {
+            let tables = [
+                "accounts", "categories", "transactions", "change_counter",
+                "budget_settings", "periods", "category_limits", "period_limits",
+            ]
+            for table in tables {
                 let exists = try db.tableExists(table)
                 #expect(exists, "missing table \(table)")
             }
-            for view in ["spending", "postings"] {
+            for view in ["spending", "postings", "period_category_status"] {
                 let exists = try db.viewExists(view)
                 #expect(exists, "missing view \(view)")
             }
@@ -84,7 +88,11 @@ struct MigrationRunnerTests {
         try database.writer.write { db in
             try db.execute(sql: "PRAGMA user_version = 999")
 
-            #expect(throws: MigrationError.databaseAheadOfCode(databaseVersion: 999, latestKnown: 1)) {
+            let expected = MigrationError.databaseAheadOfCode(
+                databaseVersion: 999,
+                latestKnown: runner.latestVersion
+            )
+            #expect(throws: expected) {
                 try runner.migrate(db)
             }
         }

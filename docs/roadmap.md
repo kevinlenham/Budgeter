@@ -61,10 +61,12 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 
 **Goal** `generatePeriods(upTo)` and effective-dated limits, both correct at the edges.
 
-- `periods` table, boundaries as local `YYYY-MM-DD` DATE strings (DEC-009)
-- `generatePeriods(upTo)` — pure, idempotent, deterministic from `(anchor, cadence)`
-- Effective-dated `category_limits` with validity ranges (DEC-008)
-- Each period snapshots the limits in force at its start
+- `budget_settings` — one row, holding the budget anchor and cadence (DEC-007) and, separately, the pay anchor and cadence (DEC-036). Both NULL until onboarding; generation refuses to invent an anchor rather than defaulting to the install date
+- `periods` table, boundaries as local `YYYY-MM-DD` DATE strings (DEC-009), each row recording the cadence and anchor that produced it. A trigger rejects overlapping periods, so "which period is this transaction in" always has exactly one answer
+- `generatePeriods(upTo)` — pure, idempotent, deterministic from `(anchor, cadence)`. Where it starts on a fresh install is DEC-039
+- Effective-dated `category_limits` with validity ranges (DEC-008), half-open `[from, to)`, with a partial unique index making two open-ended limits per category impossible
+- Each period snapshots the limits in force at its start, into `period_limits`
+- `period_category_status` view — "$340 of $500" for one category in one period, reading `spending` and never `transactions` so every invariant exclusion is inherited rather than restated
 - `booked_on` (local DATE) vs `occurred_at` (UTC instant) established in the model and never conflated
 - Safe-to-spend: `remaining_limit / days_remaining_inclusive`
 - `payDates(from:upTo:)` — the same shape as `generatePeriods`, pure and deterministic from `(pay_anchor, pay_cadence)`, feeding the DEC-036 notification queue. Built here because it is the same date arithmetic and the same 31st-of-the-month clamping; the notification binding that consumes it comes much later.
@@ -143,6 +145,7 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 - Date-format and sign-convention handling (debits negative vs a separate column)
 - Preamble-row tolerance
 - Skip report: "12 imported, 3 previously deleted and skipped" (DEC-005)
+- **Backfill periods to cover the oldest imported row** (DEC-039). Imported history carries `booked_on` dates with no period to belong to, and will not appear in any period aggregate until those periods exist. `PeriodSchedule` already answers for negative indices, so this is a call, not a feature
 
 **Done when** re-importing the same file imports nothing the second time, and deleting a row then re-importing does not resurrect it.
 

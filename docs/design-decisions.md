@@ -853,6 +853,30 @@ That leaves the deferred-FK mechanism, which does work and is genuinely structur
 
 ---
 
+## DEC-039 — Where period generation starts on a fresh install
+
+**Context** — DEC-009 defines `generatePeriods(upTo:)` as filling "the gap between the last generated period and today". On the first run there is no last generated period, so the gap has no lower bound and the function needs one. DEC-007 supplies the anchor as the user's *next* payday, which is in the future — so the anchor is not it either.
+
+**Options considered**
+- Start at the period containing today, and generate no history
+- Backfill from the anchor's own period, so period 0 always exists
+- Backfill a fixed window (say twelve periods) so the app opens with a history
+- Ask during onboarding how far back to go
+
+**Choice** — The first run generates exactly one period: the one containing today. Nothing earlier is ever created implicitly.
+
+**Reasoning**
+
+A period generated before the app existed can only be empty, because there are no transactions older than the first launch. Twelve empty periods are not history, they are twelve rows that make "your last six budgets" a wall of zeroes and give the budget screen a scroll position nobody wants. Asking the user is a question with no good answer available to them at onboarding, when they have not yet seen what a period even looks like here.
+
+Starting at the anchor's own period is the tempting one, and it is wrong for the reason DEC-007 already gives: the anchor is the *next* payday, so period 0 has not happened yet. Today sits in period −1, and the app must budget the fortnight the user is actually in rather than wait a fortnight for period 0 to arrive. Negative indices are therefore normal, and the generator's first call resolves them rather than treating them as an edge case.
+
+**Consequences**
+- `PeriodGenerator` resumes from the last stored period when there is one, and from the period containing today when there is not. Both paths are the same arithmetic; only the lower bound differs.
+- **Sprint 6 must ask for backfill explicitly.** A CSV of last year's transactions will carry `booked_on` dates with no period to belong to, and they will not appear in any period aggregate until the periods exist. The import path needs a "generate back to the oldest imported row" call — additive, and cheap, because `PeriodSchedule` already answers for negative indices.
+- A user who onboards and then does not open the app for two months still gets the intervening periods on their next launch, which is DEC-009's stated case and is unaffected by this.
+
+---
 # Open items
 
 | Item | Status | Resolution path |
