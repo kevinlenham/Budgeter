@@ -31,7 +31,7 @@ Status: settled in design session, pre-implementation. The repo was empty at the
 2. Transfers between own accounts are never spending. Excluded from every aggregate.
 3. Soft-delete everything.
 4. Ingestion is idempotent. Re-running an import or sync is a no-op.
-5. Splits don't double-count. A transaction with splits has no category of its own.
+5. ~~Splits don't double-count. A transaction with splits has no category of its own.~~ **Struck by DEC-038** — splits are not a v1 feature.
 6. No financial data in telemetry. No amounts, merchant names, category names, account names. Counts and buckets only.
 
 ---
@@ -790,6 +790,69 @@ Pay dates are stored as local DATEs plus a time-of-day, never as instants (rule 
 
 ---
 
+## DEC-037 — Refund representation
+
+**Context** — DEC-018 and DEC-035 conflict, and migration 001 cannot satisfy both. DEC-018 says refunds are "first-class opposite-sign transactions that reduce category spending". DEC-035, written later, says "amounts stay unsigned in `transactions`" and that sign is a `postings` concern. The `kind` CHECK and the amount CHECK are both written in Sprint 1, so the conflict had to be resolved before any data existed.
+
+**Options considered**
+- A fourth `kind = 'refund'`, amounts unsigned, `spending` subtracts refunds
+- Opposite-sign expense rows — DEC-018 taken literally, dropping the `amount_minor >= 0` CHECK
+- Defer to Sprint 6, when refunds first arrive by CSV
+
+**Choice** — `kind = 'refund'`, alongside `'expense'`, `'transfer'` and `'income'`. Amounts stay unsigned. The `spending` view adds expenses and subtracts refunds.
+
+**Reasoning**
+
+DEC-035 already argued this case and its argument is not specific to income: "once one row's amount means the opposite of another's, every aggregate must know which sign it is holding, and a single mis-signed row corrupts category totals and account balances simultaneously — with nothing structural to catch it." A refund is precisely such a row. Sign belongs in the expansion views, where DEC-028 put it.
+
+The sprint-ordering principle then decides the timing, exactly as DEC-035 applied it: a fourth `kind` is free in migration 001 and a data migration later.
+
+Unlike income and transfers, **a refund does carry a `category_id`** — it must, because reducing the right category's spending is the entire point of the row.
+
+**Consequences**
+- `kind` CHECK is `IN ('expense','refund','transfer','income')`.
+- `category_id` is permitted for `'expense'` and `'refund'`, and forced NULL for `'transfer'` and `'income'`.
+- `spending` signs by kind: expenses positive, refunds negative. The rows in `transactions` remain unsigned.
+- `postings` gives a refund one positive posting on its account.
+- Rule 9 restated: **spending is expenses and refunds only** — income and transfers never appear.
+- Linking a refund to its original purchase (DEC-018's "optionally linked") is not modelled in v1.
+
+---
+
+## DEC-038 — Splits removed from v1
+
+**Context** — Two separate problems surfaced when implementing DEC-029.
+
+*Structural.* DEC-029's enforcement mechanism is unimplementable as written. An `AFTER INSERT` trigger that raises when the split total ≠ the parent amount rejects the first row of every multi-way split: inserting $70 of a $70/$30 split on a $100 parent sees $70 ≠ $100 and aborts. There is no partial state in which the invariant holds, so the check must be deferred to end-of-transaction — which SQLite can express only through a trigger-maintained "balanced parents" table plus a `DEFERRABLE INITIALLY DEFERRED` foreign key. That is the most intricate SQL in the schema, for a feature not yet justified by use.
+
+*Product.* Splitting is manual work the user must remember to do on every mixed purchase. One $100 Woolworths charge covering $70 of groceries and $30 of a gift can instead be corrected by editing the row's category, or by deleting it and entering two transactions — the account balance nets identically and the category totals come out right.
+
+**Options considered**
+- Remove splits from v1
+- Build them now with the deferred-FK mechanism
+- Keep DEC-029's trigger behind a guard flag the write path sets during batch inserts
+- Validate split sums in the upsert funnel instead
+
+**Choice** — Remove splits from v1 entirely. Invariant 5 is struck, not parked. DEC-029 is superseded.
+
+**Reasoning**
+
+The two rejected enforcement mechanisms both fail on the brief's own terms. A guard flag is convention wearing a trigger's clothes — forget to clear it and enforcement silently stops, which is the failure class DEC-003 exists to prevent. Funnel-level validation was already considered and rejected by DEC-029 itself for being convention.
+
+That leaves the deferred-FK mechanism, which does work and is genuinely structural, against a feature whose value is thin. The only case where "just enter two transactions" is materially worse is Sprint 6, when a bank CSV delivers one $100 row that the user has already recorded as two — a dedupe problem, not a budgeting one.
+
+**The asymmetry that makes this cheap is the deciding factor.** Refunds (DEC-037) had to be settled now because the `kind` CHECK constrains every row, so changing it later is a data migration. Splits are not like that: adding a `splits` table later is purely additive — a new table, its triggers, and dropping and recreating the `spending` view. A view holds no data, so recreating one costs nothing. Deferring the decision is therefore nearly free, while building it now costs the hardest work in Sprint 1.
+
+**Consequences**
+- Invariant 5 ("splits don't double-count") is removed from the invariant list. It cannot be violated by a schema that has no splits.
+- `spending` loses its split-parent/split-child clause and reads `transactions` directly — meaningfully simpler, which matters for the one definition every aggregate depends on.
+- Sprint 5 becomes transfers-only.
+- **The Sprint 6 matcher must tolerate one bank row legitimately facing several manual rows.** DEC-017's "each row participates in at most one proposal" rule already prevents a wrong auto-merge here, and DEC-016 means nothing is mutated without consent.
+- DEC-005's unconditional index covering soft-deleted rows means a bank row the user deleted and replaced with two manual rows will not resurrect on re-import. The manual correction survives.
+- Revisit only if real use produces mixed purchases often enough to be annoying.
+
+---
+
 # Open items
 
 | Item | Status | Resolution path |
@@ -818,4 +881,5 @@ Extracted for quick reference, because these are the ones that produce silent co
 6. **Period boundaries are local DATEs, never instants.** (DEC-009)
 7. **Drafts never count toward the authoritative spending number, and are never auto-confirmed.** (DEC-012)
 8. **`Money` cannot conform to `TelemetrySafe`.** (DEC-022)
-9. **Income is never spending and never carries a category.** `spending` reads `kind = 'expense'` only. (DEC-035)
+9. **Income and transfers are never spending and never carry a category.** `spending` reads `kind IN ('expense','refund')` only, expenses positive and refunds negative. (DEC-035, DEC-037)
+10. **Amounts in `transactions` are never negative.** Sign exists only in the `spending` and `postings` views. (DEC-035, DEC-037)

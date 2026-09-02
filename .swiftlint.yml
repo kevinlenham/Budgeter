@@ -10,5 +10,14 @@ opt_in_rules:
 disabled_rules:
   - todo
   - static_over_final_class # false positive on `override class var` (can't override with `static`)
+  - trailing_comma # SwiftFormat adds these; the two tools disagree, SwiftFormat wins
 
 line_length: 120
+
+identifier_name:
+  min_length: 2
+  excluded:
+    - a # property-test operands read better as algebra than as prose
+    - b
+    - c
+    - z

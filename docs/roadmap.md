@@ -39,11 +39,10 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 
 - `Money`: a Swift value type over integer minor units + currency code. No arithmetic operators on raw values — explicit `add`/`subtract`/`allocate` functions, currency mismatch throws (invariant 1)
 - Property tests: associativity, no precision loss, currency mismatch rejected, `allocate` sums exactly to the input with no lost cents
-- Migration 001 as raw SQL: `accounts`, `categories`, `transactions`, `splits`, plus the DEC-006 four columns (`id` UUIDv7, `created_at`, `updated_at`, `deleted_at`, `change_seq`) on every table
-- CHECK constraints: `status IN ('draft','confirmed')`, `kind IN ('expense','transfer','income')` (DEC-035), transfer rows have NULL `category_id`, income rows have NULL `category_id` and no splits, split parents have NULL `category_id`
-- Trigger: split totals must equal the parent amount (DEC-029)
-- Unique index on `(account_id, source, dedupe_key)` — unconditional, covering soft-deleted rows (DEC-005)
-- The **`spending` view** (DEC-010) — expenses only, `kind = 'expense'` (DEC-035) — and the **`postings` view** (DEC-028), which expands transfers into two signed rows and income into one positive row
+- Migration 001 as raw SQL: `accounts`, `categories`, `transactions`, plus the DEC-006 four columns (`id` UUIDv7, `created_at`, `updated_at`, `deleted_at`, `change_seq`) on every table. No `splits` table — struck by DEC-038.
+- CHECK constraints: `status IN ('draft','confirmed')`, `kind IN ('expense','refund','transfer','income')` (DEC-035, DEC-037), transfer and income rows have NULL `category_id`, transfers carry `from_account_id`/`to_account_id` and no `account_id`, amounts are never negative
+- Unique index on `(COALESCE(account_id, from_account_id), source, dedupe_key)` — unconditional, covering soft-deleted rows (DEC-005). The `COALESCE` is load-bearing: transfers carry no `account_id`, and SQLite treats NULLs as distinct, so without it transfers would never dedupe.
+- The **`spending` view** (DEC-010) — `kind IN ('expense','refund')`, expenses positive and refunds negative (DEC-035, DEC-037) — and the **`postings` view** (DEC-028), which expands transfers into two signed rows and income and refunds into one positive row each
 - The **single upsert funnel** — the only write path for ingested data (DEC-005)
 - Hand-written migration runner with a `user_version` check, tested against both an empty and a populated DB
 
@@ -120,16 +119,15 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 
 ---
 
-## Sprint 5 — Transfers and splits
+## Sprint 5 — Transfers
 
-**Estimate** 1–2 sessions. The schema already supports both; this is UI and query work.
+**Estimate** 1 session. The schema already supports transfers; this is UI and query work. Splits were struck by DEC-038.
 
 - Transfer entry: one row, `from_account_id` / `to_account_id` (DEC-028)
 - Per-account balances read `postings`, never `transactions`
-- Split editor, with the sum-equals-parent trigger surfaced as a friendly error rather than a crash
-- Verify transfers are absent from every aggregate and splits do not double-count
+- Refund entry (DEC-037) — `kind = 'refund'`, carrying a category, reducing that category's spending
 
-**Done when** a test asserts that adding a transfer moves no spending total by a cent.
+**Done when** a test asserts that adding a transfer moves no spending total by a cent, and a refund reduces its category by exactly its amount.
 
 ---
 

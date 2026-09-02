@@ -3,3 +3,7 @@
 --maxwidth 120
 --self remove
 --importgrouping testable-bottom
+
+# Swift Testing's #expect macro loses the throwing context when `try` is hoisted
+# outside it, so the hoisted form fails to compile. Leave `try` where it is.
+--disable hoistTry,hoistAwait
