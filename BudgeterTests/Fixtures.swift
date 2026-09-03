@@ -34,6 +34,47 @@ enum Fixture {
         return id
     }
 
+    /// A configured database: one account, the starter categories, a budget and pay
+    /// schedule, and every period up to `today` generated.
+    ///
+    /// The same sequence `AppModel.completeOnboarding` performs, in one call, so a
+    /// test about something *after* onboarding does not open with twenty lines of
+    /// it. Returns the account, which is what the caller usually needs next.
+    @discardableResult
+    static func onboard(
+        _ db: Database,
+        payday: String = "2026-09-11",
+        cadence: Cadence = .fortnightly,
+        today: String = "2026-09-02"
+    ) throws -> UUID {
+        let account = try AccountStore().create(name: "Everyday", currency: .aud, in: db)
+        for name in CategoryStore.starters {
+            try CategoryStore().create(name: name, in: db)
+        }
+        var settings = try BudgetSettingsStore().load(db)
+        guard let anchor = CivilDate(iso: payday), let today = CivilDate(iso: today) else {
+            throw BudgetSettingsError.malformedStoredValue(payday)
+        }
+        let schedule = PeriodSchedule(anchor: anchor, cadence: cadence)
+        settings.schedule = schedule
+        settings.paySchedule = schedule
+        try BudgetSettingsStore().save(settings, in: db)
+        try PeriodGenerator().generate(through: today, in: db)
+        return account
+    }
+
+    /// The id of a starter category, by name.
+    static func category(_ name: String, in db: Database) throws -> UUID {
+        let id = try String.fetchOne(
+            db, sql: "SELECT id FROM categories WHERE name = ? AND deleted_at IS NULL",
+            arguments: [name]
+        )
+        guard let id, let uuid = UUID(uuidString: id) else {
+            throw BudgetSettingsError.malformedStoredValue(name)
+        }
+        return uuid
+    }
+
     @discardableResult
     static func insertCategory(
         _ db: Database,

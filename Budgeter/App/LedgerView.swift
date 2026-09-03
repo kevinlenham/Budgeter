@@ -19,7 +19,10 @@ import SwiftUI
 struct LedgerView: View {
     let database: AppDatabase
 
+    @Environment(AppModel.self) private var model
+
     @State private var entries: [LedgerEntry] = []
+    @State private var payStatus: PayStatus = .upToDate
     @State private var isAdding = false
     @State private var editing: UUID?
 
@@ -29,25 +32,38 @@ struct LedgerView: View {
     }
 
     var body: some View {
+        @Bindable var model = model
+
         NavigationStack {
-            Group {
+            List {
+                // DEC-036's fallback card. Shown regardless of notification
+                // permission, because it is the only thing standing between a
+                // prompt the user declined and a feature that silently does
+                // nothing. Pinned above the ledger rather than folded into it: it
+                // is a question, not a transaction.
+                if case let .unlogged(since) = payStatus {
+                    Section {
+                        PayPromptCard(payday: since) { model.isLoggingPay = true }
+                    }
+                }
+
                 if entries.isEmpty {
-                    ContentUnavailableView(
-                        "Nothing logged yet",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text("Tap + to add your first transaction.")
-                    )
-                } else {
-                    List {
-                        ForEach(days, id: \.day) { day in
-                            Section(dayTitle(day.day)) {
-                                ForEach(day.entries) { entry in
-                                    Button { editing = entry.transactionId.asUUID } label: {
-                                        LedgerRow(entry: entry)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
+                    Section {
+                        ContentUnavailableView(
+                            "Nothing logged yet",
+                            systemImage: "list.bullet.rectangle",
+                            description: Text("Tap + to add your first transaction.")
+                        )
+                    }
+                }
+
+                ForEach(days, id: \.day) { day in
+                    Section(dayTitle(day.day)) {
+                        ForEach(day.entries) { entry in
+                            Button { editing = entry.transactionId.asUUID } label: {
+                                LedgerRow(entry: entry)
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -65,15 +81,35 @@ struct LedgerView: View {
             .sheet(item: $editing) { id in
                 TransactionFormView(database: database, editing: id)
             }
+            // DEC-036: "tapping opens a blank income entry form; nothing is written
+            // until the user saves." Both routes into it — the notification's "Log
+            // now" and the card above — land here, on an empty form.
+            .sheet(isPresented: $model.isLoggingPay) {
+                TransactionFormView(database: database, kind: .income)
+            }
             .task { await observe() }
         }
     }
 
+    /// One observation for both the list and the pay card, so they cannot be a
+    /// frame out of step — logging a payday must make the card disappear in the
+    /// same redraw that puts the row in the list.
     private func observe() async {
-        let observation = ValueObservation.tracking(Queries.ledger)
+        let today = CivilDate.today()
+        let observation = ValueObservation.tracking { db in
+            LedgerSnapshot(
+                entries: try Queries.ledger(db),
+                payStatus: PayStatus.evaluate(
+                    paySchedule: try BudgetSettingsStore().load(db).paySchedule,
+                    lastIncomeBookedOn: try Queries.lastIncomeBookedOn(db),
+                    today: today
+                )
+            )
+        }
         do {
-            for try await rows in observation.values(in: database.writer) {
-                entries = rows
+            for try await snapshot in observation.values(in: database.writer) {
+                entries = snapshot.entries
+                payStatus = snapshot.payStatus
             }
         } catch {
             entries = []
@@ -90,6 +126,36 @@ struct LedgerView: View {
         case 1: return "Yesterday"
         default: return date.middayDate().formatted(.dateTime.weekday(.wide).day().month(.wide))
         }
+    }
+}
+
+/// Everything the ledger screen draws, in one fetch.
+nonisolated struct LedgerSnapshot: Equatable, Sendable {
+    var entries: [LedgerEntry]
+    var payStatus: PayStatus
+}
+
+/// DEC-036's card: "no pay logged since 14 March".
+///
+/// It names the payday and asks; it never states an amount, and it offers no way
+/// to accept a figure the app made up, because there is no figure. Pay varies, and
+/// DEC-012's argument applies here with less excuse than it does to capture drafts:
+/// a projected salary comes from nothing at all.
+struct PayPromptCard: View {
+    let payday: CivilDate
+    let onLog: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Payday has been and gone", systemImage: "calendar.badge.clock")
+                .font(.headline)
+            Text("Nothing logged since \(payday.middayDate().formatted(.dateTime.day().month(.wide))).")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button("Log what you were paid", action: onLog)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(.vertical, 4)
     }
 }
 

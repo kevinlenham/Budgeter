@@ -142,6 +142,23 @@ nonisolated enum Queries {
         )
     }
 
+    /// The `booked_on` of the most recent income row, for DEC-036's "no pay logged
+    /// since 14 March" card.
+    ///
+    /// Reads `transactions` directly rather than a view, and the exception is worth
+    /// justifying: `spending` excludes income by design (rule 9) and `postings`
+    /// splits transfers into two rows, so neither answers "when was the user last
+    /// paid". The exclusions that matter here are stated explicitly instead —
+    /// confirmed, not deleted — and there is no aggregate involved, so rule 1 is
+    /// untouched.
+    static func lastIncomeBookedOn(_ db: Database) throws -> CivilDate? {
+        let iso = try String.fetchOne(db, sql: """
+        SELECT MAX(booked_on) FROM transactions
+         WHERE kind = 'income' AND status = 'confirmed' AND deleted_at IS NULL
+        """)
+        return iso.flatMap(CivilDate.init(iso:))
+    }
+
     /// Total spending in a period, across every category — including categories with
     /// no limit, which `budgetLines` deliberately omits. Reads `spending`, so every
     /// exclusion is inherited.

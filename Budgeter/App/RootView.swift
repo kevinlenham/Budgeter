@@ -30,6 +30,9 @@ struct RootView: View {
                     Tab("Budget", systemImage: "chart.pie") {
                         BudgetView(database: model.database)
                     }
+                    Tab("Settings", systemImage: "gear") {
+                        SettingsView()
+                    }
                 }
 
             case let .failed(message):
@@ -43,6 +46,11 @@ struct RootView: View {
                 }
             }
         }
+        // The model is in the environment as well as being held here, because the
+        // settings screens and the payday reminder's deep link all need it and
+        // threading it through three levels of navigation by hand is how one of
+        // them ends up with a different copy.
+        .environment(model)
         .task { await model.start() }
     }
 }
