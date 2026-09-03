@@ -52,6 +52,13 @@ nonisolated struct CategoryLimits: Sendable {
             arguments: [categoryID.uuidString]
         )
         if let current {
+            // Setting a limit twice from the same date is one decision revised, not
+            // two decisions in sequence: closing a zero-length range would leave a
+            // row no period could ever snapshot, so the open row is amended instead.
+            if current["effective_from"] as String == effectiveFrom.iso {
+                try amend(current, to: amount, timestamp: timestamp, in: db)
+                return
+            }
             try close(current, at: effectiveFrom, timestamp: timestamp, in: db)
         }
 
@@ -95,6 +102,25 @@ nonisolated struct CategoryLimits: Sendable {
     }
 
     // MARK: - Private
+
+    /// Revises the open limit in place, for a change effective from the date it
+    /// already starts on.
+    private func amend(_ current: Row, to amount: Money, timestamp: String, in db: Database) throws {
+        try db.execute(
+            sql: """
+            UPDATE category_limits
+               SET amount_minor = ?, currency = ?, updated_at = ?, change_seq = ?
+             WHERE id = ?
+            """,
+            arguments: [
+                amount.minorUnits,
+                amount.currency.rawValue,
+                timestamp,
+                try AppDatabase.nextChangeSeq(db),
+                current["id"] as String,
+            ]
+        )
+    }
 
     /// Closes the limit currently in force so the new one can open on the same day.
     ///

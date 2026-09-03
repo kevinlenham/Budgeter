@@ -877,6 +877,59 @@ Starting at the anchor's own period is the tempting one, and it is wrong for the
 - A user who onboards and then does not open the app for two months still gets the intervening periods on their next launch, which is DEC-009's stated case and is unaffected by this.
 
 ---
+## DEC-040 — The ledger reads its own view, not `spending`
+
+**Context** — Sprint 3's plan says the ledger list reads the `spending` view. Building it showed that to be half right. `spending` is deliberately narrow: it answers "what counts against a budget", so by design it excludes income (rule 9) and transfers (invariant 2). A ledger built on it shows the user a list their own payday is missing from — and DEC-035 put income entry in this same sprint precisely so that recording a payday is possible from the first usable build. It would be recordable and then invisible.
+
+**Options considered**
+- A `ledger` view of its own, unfiltered, signed for display
+- Read `postings` instead
+- Read `transactions` directly from the view layer
+- Union `spending` with a second query for income
+
+**Choice** — A `ledger` view: one row per transaction, no kind excluded, signed for display. `spending` remains the only thing any *aggregate* reads.
+
+**Reasoning**
+
+`postings` is the wrong shape: it expands a transfer into two signed rows, which is exactly right for a balance and exactly wrong for a list of things that happened — the user would see their transfer twice.
+
+Reading `transactions` directly from a view file is the option that erodes rule 1. The rule's value is that "aggregates read views" is checkable by grepping for the table name; once one screen reads the table because it had a good reason, the next one does not need as good a reason.
+
+So the ledger gets a view. **Rule 1 is about totals, not about lists**, and no total is computed from this one — the budget screen still reads `period_category_status`, which reads `spending`.
+
+**Consequences**
+- Sign in `ledger` is a display convention, not an accounting one: money out negative, money in positive, from the user's point of view. A transfer shows as leaving the account it left.
+- Drafts appear and carry their status. Rule 7 says a draft must not count toward the authoritative number, not that it must be invisible — and the DEC-011 review UX depends on seeing them.
+- Account and category names are joined in, so the list needs no second query per row.
+
+---
+
+## DEC-041 — Editing a limit revises the period you are in
+
+**Context** — DEC-008 has each period snapshot the limits in force at its start, so a past period keeps the limit that applied then. It does not say what happens when the user sets a limit *during* a period, which is the only way limits ever get set in Sprint 3: the current period has already taken its snapshot, so a new limit would not appear until the next period began.
+
+**Options considered**
+- Re-snapshot the current period when a limit changes
+- Show the new limit only from the next period, as a cadence switch does
+- Compute limits live and drop snapshots entirely
+
+**Choice** — Setting a limit writes it effective from the current period's start and re-snapshots that period only.
+
+**Reasoning**
+
+Dropping snapshots would satisfy today and break DEC-008's actual requirement — a past period would silently start reporting today's limit.
+
+Deferring to the next boundary is DEC-008's rule for a *cadence switch*, and the reason there does not transfer. A cadence switch changes what a period *is*, so honouring it mid-period would mean truncating one; DEC-008 rejected that so "partial periods never exist" and "spent this period" never jumps for invisible reasons. Setting a limit changes neither the period's shape nor what has been spent in it. A user who types $500 and watches the screen keep saying $0 has been given a bug, not a principle.
+
+**The distinction is between the period in progress and the periods behind it.** The current period is a decision still being made; the ones behind it are history. `PeriodGenerator.resnapshot` is therefore only ever called for the period containing today.
+
+**Consequences**
+- Setting a limit twice within one period amends the open `category_limits` row rather than closing it, since closing would produce a zero-length range no period could snapshot.
+- A backdated limit — one effective before the currently open row began — is still refused outright.
+- When Sprint 4 adds limit editing outside the current period, it will need to say explicitly which period it is revising, and must not reach further back.
+
+---
+
 # Open items
 
 | Item | Status | Resolution path |

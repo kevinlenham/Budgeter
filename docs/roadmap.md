@@ -87,8 +87,10 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 
 - Onboarding: accounts, next payday (DEC-007), cadence, starter categories, and the pay schedule pre-filled from those answers (DEC-036) — stored, but no notification scheduled yet
 - Add/edit transaction form, including `kind = 'income'` entry (DEC-035) — the same form, no category, so recording a payday is possible from the first usable build even though the reminder is not yet
-- Ledger list grouped by day, reading the `spending` view, driven by GRDB `ValueObservation` into SwiftUI
-- Budget screen: per-category "$340 of $500", days remaining, safe-to-spend
+- Ledger list grouped by day, reading the `ledger` view (DEC-040 — *not* `spending`, which by design has no income in it), driven by GRDB `ValueObservation` into SwiftUI
+- Budget screen: per-category "$340 of $500", days remaining, safe-to-spend, and a limit editor — setting a limit revises the period you are in (DEC-041)
+- `MoneyText` — parsing and formatting amounts without a `Double` anywhere, so invariant 1 survives a text field
+- `CivilDate+Clock` — the only place a `Date` and a `CivilDate` meet, quarantined so there is one file to check for time-zone mistakes
 - Installed on your phone directly from Xcode (free-provisioned; re-run from Xcode roughly weekly to re-sign, per DEC-034)
 
 **Done when** it is on your phone and you have logged a week of real transactions in it. **Do not start Sprint 4 before that is true** — every later sprint is tuned against real data.

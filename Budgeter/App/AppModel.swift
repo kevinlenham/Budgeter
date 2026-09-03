@@ -1,0 +1,99 @@
+//
+//  AppModel.swift
+//  Budgeter
+//
+//  Owns the database connection and the two things that have to happen before any
+//  screen can draw: knowing whether onboarding has run, and catching the periods up
+//  to today.
+//
+//  DEC-009 chose lazy generation, called on launch and before any period query, so
+//  this is where "on launch" lives. It is cheap when there is nothing to do — one
+//  indexed read — which is what makes calling it unconditionally the right shape.
+//
+
+import Foundation
+import GRDB
+import SwiftUI
+
+@MainActor
+@Observable
+final class AppModel {
+    enum Phase: Equatable {
+        case loading
+        case onboarding
+        case ready
+        case failed(String)
+    }
+
+    let database: AppDatabase
+    private(set) var phase: Phase = .loading
+    private(set) var settings = BudgetSettings()
+
+    init(database: AppDatabase) {
+        self.database = database
+    }
+
+    /// The on-device database, in Application Support so it is covered by encrypted
+    /// device backup (DEC-002) and the file protection DEC-026 will rely on.
+    static func live() throws -> AppModel {
+        let directory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        return try AppModel(database: .onDisk(at: directory.appending(path: "budgeter.sqlite")))
+    }
+
+    /// Loads settings and fills in any periods missing since the last launch.
+    func start() async {
+        do {
+            let today = CivilDate.today()
+            let settings = try await database.writer.write { db -> BudgetSettings in
+                let settings = try BudgetSettingsStore().load(db)
+                if settings.schedule != nil {
+                    try PeriodGenerator().generate(through: today, in: db)
+                }
+                return settings
+            }
+            self.settings = settings
+            phase = settings.schedule == nil ? .onboarding : .ready
+        } catch {
+            phase = .failed(String(describing: error))
+        }
+    }
+
+    /// Writes the answers onboarding collected, then starts generating periods.
+    func completeOnboarding(_ answers: OnboardingAnswers) async {
+        do {
+            try await database.writer.write { db in
+                try AccountStore().create(name: answers.accountName, currency: answers.currency, in: db)
+                for name in answers.categoryNames {
+                    try CategoryStore().create(name: name, in: db)
+                }
+
+                var settings = try BudgetSettingsStore().load(db)
+                let schedule = PeriodSchedule(anchor: answers.nextPayday, cadence: answers.cadence)
+                settings.schedule = schedule
+                // DEC-036 pre-fills the pay schedule from these same answers, so the
+                // reminder becomes a confirm step later rather than a second
+                // interrogation. Nothing is scheduled yet — that is Sprint 4.
+                settings.paySchedule = schedule
+                try BudgetSettingsStore().save(settings, in: db)
+            }
+            await start()
+        } catch {
+            phase = .failed(String(describing: error))
+        }
+    }
+}
+
+/// What onboarding collects, in one value, so the write is a single transaction.
+nonisolated struct OnboardingAnswers: Equatable, Sendable {
+    var accountName: String
+    var currency: Currency
+    /// DEC-007: the user's *next* payday, which is a real-world fact they know.
+    var nextPayday: CivilDate
+    var cadence: Cadence
+    var categoryNames: [String]
+}

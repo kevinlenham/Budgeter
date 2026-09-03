@@ -41,6 +41,22 @@ nonisolated struct PeriodGenerator: Sendable {
         return periods
     }
 
+    /// Rebuilds a period's limit snapshot from the limits currently in force.
+    ///
+    /// Only ever for the period in progress. DEC-008's rule is that a *past* period
+    /// keeps the limit that applied then — not that a user who sets their grocery
+    /// budget today should watch this period ignore it until the next one starts.
+    /// Editing a limit in the current period revises the current period; every
+    /// period already behind it is untouched.
+    func resnapshot(period: PeriodRecord, in db: Database) throws {
+        guard let startsOn = CivilDate(iso: period.startsOn),
+              let id = UUID(uuidString: period.id)
+        else { throw BudgetSettingsError.malformedStoredValue(period.startsOn) }
+
+        try db.execute(sql: "DELETE FROM period_limits WHERE period_id = ?", arguments: [period.id])
+        try snapshotLimits(periodID: id, startsOn: startsOn, in: db)
+    }
+
     // MARK: - Private
 
     /// Where to resume.

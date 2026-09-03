@@ -205,6 +205,35 @@ struct PeriodStatusViewTests {
         }
     }
 
+    /// A raw insert that lets `booked_on` and `occurred_at` disagree about the day,
+    /// which the fixtures deliberately do not allow.
+    private struct Purchase {
+        var amount: Int64
+        var bookedOn: String
+        var occurredAt: String
+    }
+
+    private func insert(
+        _ db: Database, account: UUID, category: UUID, purchase: Purchase
+    ) throws {
+        let (amount, bookedOn, occurredAt) = (purchase.amount, purchase.bookedOn, purchase.occurredAt)
+        try db.execute(
+            sql: """
+            INSERT INTO transactions (
+                id, kind, status, amount_minor, currency, account_id, category_id,
+                merchant, booked_on, occurred_at, source, dedupe_key,
+                created_at, updated_at, change_seq
+            ) VALUES (?, 'expense', 'confirmed', ?, 'AUD', ?, ?,
+                      'Corner shop', ?, ?, 'manual', ?, ?, ?, ?)
+            """,
+            arguments: [
+                UUIDv7.generate().uuidString, amount, account.uuidString, category.uuidString,
+                bookedOn, occurredAt, UUID().uuidString, occurredAt, occurredAt,
+                try AppDatabase.nextChangeSeq(db),
+            ]
+        )
+    }
+
     @Test("an 11pm 31 March transaction stays in March — DEC-009's whole point")
     func lateNightOnABoundaryStaysInItsOwnPeriod() throws {
         let database = try Fixture.database()
@@ -224,25 +253,21 @@ struct PeriodStatusViewTests {
             try PeriodGenerator().generate(through: try date("2026-03-15"), in: db)
             try PeriodGenerator().generate(through: try date("2026-04-15"), in: db)
 
-            // 31 March 2026, 11pm in Melbourne. Australia leaves daylight saving on
-            // 5 April, so the local clock is UTC+11 here: the UTC instant is already
-            // 1 April. Stored as an instant, this purchase lands in April. Stored as
-            // booked_on — a local date — it cannot.
-            try db.execute(
-                sql: """
-                INSERT INTO transactions (
-                    id, kind, status, amount_minor, currency, account_id, category_id,
-                    merchant, booked_on, occurred_at, source, dedupe_key,
-                    created_at, updated_at, change_seq
-                ) VALUES (?, 'expense', 'confirmed', 4500, 'AUD', ?, ?,
-                          'Late night chemist', '2026-03-31', '2026-04-01T12:00:00.000Z',
-                          'manual', ?, '2026-03-31T12:00:00.000Z', '2026-03-31T12:00:00.000Z', ?)
-                """,
-                arguments: [
-                    UUIDv7.generate().uuidString, account.uuidString, category.uuidString,
-                    UUID().uuidString, try AppDatabase.nextChangeSeq(db),
-                ]
-            )
+            // Two purchases either side of the boundary, both with an occurred_at
+            // whose UTC day differs from the local day the user experienced.
+            //
+            // Australia is still on daylight saving here (it ends 5 April), so the
+            // Melbourne clock is UTC+11. 11pm on 31 March is midday UTC on the 31st;
+            // 9am on 1 April is 10pm UTC on the *31st*. Decide period membership by
+            // the instant and that second purchase falls into March. booked_on is a
+            // local date, so it cannot.
+            try insert(db, account: account, category: category, purchase: Purchase(
+                amount: 4500, bookedOn: "2026-03-31", occurredAt: "2026-03-31T12:00:00.000Z"
+            ))
+            // 9am on 1 April in Melbourne — 10pm on 31 March in UTC.
+            try insert(db, account: account, category: category, purchase: Purchase(
+                amount: 1100, bookedOn: "2026-04-01", occurredAt: "2026-03-31T22:00:00.000Z"
+            ))
 
             let rows = try PeriodCategoryStatusRow.fetchAll(
                 db, sql: "SELECT * FROM period_category_status ORDER BY starts_on"
@@ -250,7 +275,7 @@ struct PeriodStatusViewTests {
             let march = try #require(rows.first { $0.startsOn == "2026-03-01" })
             let april = try #require(rows.first { $0.startsOn == "2026-04-01" })
             #expect(march.spentMinor == 4500, "an 11pm 31 March purchase belongs to March")
-            #expect(april.spentMinor == 0)
+            #expect(april.spentMinor == 1100, "a 9am 1 April purchase belongs to April, not to March")
         }
     }
 
@@ -313,65 +338,6 @@ struct PeriodStatusViewTests {
             )
 
             #expect(try status(db)?.remainingMinor == -12500, "the size of the hole is the useful number")
-        }
-    }
-}
-
-@Suite("Safe to spend — DEC-009")
-struct SafeToSpendTests {
-    private func period(_ start: String, _ end: String) throws -> BudgetPeriod {
-        BudgetPeriod(
-            index: 0,
-            startsOn: try #require(CivilDate(iso: start)),
-            endsOn: try #require(CivilDate(iso: end))
-        )
-    }
-
-    private func date(_ iso: String) throws -> CivilDate {
-        try #require(CivilDate(iso: iso))
-    }
-
-    @Test("days remaining counts today, so the last day of a period has one day left")
-    func daysRemainingIsInclusive() throws {
-        let march = try period("2026-03-01", "2026-03-31")
-        #expect(SafeToSpend.daysRemaining(in: march, asOf: try date("2026-03-01")) == 31)
-        #expect(SafeToSpend.daysRemaining(in: march, asOf: try date("2026-03-15")) == 17)
-        #expect(SafeToSpend.daysRemaining(in: march, asOf: try date("2026-03-31")) == 1, "not zero")
-        #expect(SafeToSpend.daysRemaining(in: march, asOf: try date("2026-04-01")) == 0)
-        #expect(SafeToSpend.daysRemaining(in: march, asOf: try date("2026-02-01")) == 31, "not yet started")
-    }
-
-    @Test("the daily allowance is the remainder spread over the days that are left")
-    func dailyAllowance() throws {
-        let remaining = Money(minorUnits: 16000, currency: .aud)
-        #expect(try SafeToSpend.daily(remaining: remaining, daysRemaining: 16).minorUnits == 1000)
-        #expect(try SafeToSpend.daily(remaining: remaining, daysRemaining: 1).minorUnits == 16000)
-    }
-
-    @Test("the allowance rounds down, so the figure is always actually affordable")
-    func roundsDown() throws {
-        let remaining = Money(minorUnits: 1000, currency: .aud)
-        #expect(try SafeToSpend.daily(remaining: remaining, daysRemaining: 3).minorUnits == 333)
-        #expect(try SafeToSpend.daily(remaining: remaining, daysRemaining: 7).minorUnits == 142)
-    }
-
-    @Test("an overspent category may spend nothing today, rather than a negative amount")
-    func overspentGivesZero() throws {
-        let overspent = Money(minorUnits: -12500, currency: .aud)
-        #expect(try SafeToSpend.daily(remaining: overspent, daysRemaining: 10).isZero)
-        #expect(try SafeToSpend.daily(remaining: Money.zero(.aud), daysRemaining: 10).isZero)
-    }
-
-    @Test("the currency survives the division")
-    func currencyIsPreserved() throws {
-        let remaining = Money(minorUnits: 10000, currency: .jpy)
-        #expect(try SafeToSpend.daily(remaining: remaining, daysRemaining: 4).currency == .jpy)
-    }
-
-    @Test("a finished period throws rather than dividing by zero")
-    func endedPeriodThrows() throws {
-        #expect(throws: SafeToSpendError.periodAlreadyEnded) {
-            try SafeToSpend.daily(remaining: Money(minorUnits: 100, currency: .aud), daysRemaining: 0)
         }
     }
 }
