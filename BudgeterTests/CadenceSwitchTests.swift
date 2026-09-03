@@ -151,6 +151,38 @@ struct CadenceSwitchTests {
         }
     }
 
+    @Test("resuming generation after a switch never produces an overlapping period")
+    func generationAfterSwitchNeverOverlaps() throws {
+        // Regression test. `firstMissingIndex` used to reinterpret the *old*
+        // period's start date under the *new* schedule's anchor arithmetic —
+        // sound only when the schedule never changes. Fortnightly (anchored
+        // 2026-09-11) switched to weekly is a combination where that produced
+        // index -1 instead of 0, generating 2026-09-04...2026-09-10, which
+        // overlaps the already-stored 2026-08-28...2026-09-10 and trips
+        // `trg_periods_no_overlap` — the exact failure a live switch hit.
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            let plan = try CadenceSwitch().plan(to: .weekly, asOf: try date("2026-09-02"), in: db)
+            try CadenceSwitch().apply(plan, limits: [:], in: db)
+
+            // Generating well past the new boundary must not throw.
+            let generated = try PeriodGenerator().generate(through: try date("2026-09-15"), in: db)
+            #expect(!generated.isEmpty)
+            #expect(generated.allSatisfy { $0.startsOn >= plan.effectiveFrom })
+
+            // Belt and braces: read every stored period back and check none overlap.
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT starts_on, ends_on FROM periods WHERE deleted_at IS NULL ORDER BY starts_on
+            """)
+            for (previous, next) in zip(rows, rows.dropFirst()) {
+                let previousEnd = previous["ends_on"] as String
+                let nextStart = next["starts_on"] as String
+                #expect(nextStart > previousEnd, "\(previousEnd) and \(nextStart) overlap")
+            }
+        }
+    }
+
     @Test("the new limits apply from the boundary and the old ones survive behind it")
     func limitsAreEffectiveDatedForward() throws {
         let database = try Fixture.database()

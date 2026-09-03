@@ -61,14 +61,25 @@ nonisolated struct PeriodGenerator: Sendable {
 
     /// Where to resume.
     ///
-    /// With periods already stored, the next index after the latest one. With none,
-    /// the period containing today — *not* the anchor's own period. DEC-007 asks for
-    /// the user's **next** payday, so at onboarding the anchor is in the future and
-    /// today sits one period behind it; starting at the anchor would leave the user
-    /// with no current period until their next payday arrived.
+    /// With periods already stored, the index `schedule` assigns to the day right
+    /// after the latest one ends. With none, the period containing today — *not*
+    /// the anchor's own period. DEC-007 asks for the user's **next** payday, so at
+    /// onboarding the anchor is in the future and today sits one period behind it;
+    /// starting at the anchor would leave the user with no current period until
+    /// their next payday arrived.
+    ///
+    /// Deliberately keyed off the day after the last period *ends*, not off the
+    /// last period's own start reinterpreted under `schedule`. Those agree as long
+    /// as `schedule` never changes, but after a DEC-008 cadence switch `schedule`'s
+    /// anchor has no relationship to a period stored under the old one — indexing
+    /// the old start under the new schedule can land on an index whose period
+    /// overlaps the row already on disk, which the `trg_periods_no_overlap` trigger
+    /// then rejects. The boundary date is schedule-agnostic: `CadenceSwitch.plan`
+    /// already computes the switch's `effectiveFrom` as this same day, precisely so
+    /// the new schedule's first period starts there and nowhere else.
     private func firstMissingIndex(for schedule: PeriodSchedule, today: CivilDate, in db: Database) throws -> Int {
         let latest = try String.fetchOne(db, sql: """
-        SELECT starts_on
+        SELECT ends_on
           FROM periods
          WHERE deleted_at IS NULL
          ORDER BY starts_on DESC
@@ -77,10 +88,10 @@ nonisolated struct PeriodGenerator: Sendable {
         guard let latest else {
             return schedule.index(containing: today)
         }
-        guard let start = CivilDate(iso: latest) else {
+        guard let end = CivilDate(iso: latest) else {
             throw BudgetSettingsError.malformedStoredValue(latest)
         }
-        return schedule.index(containing: start) + 1
+        return schedule.index(containing: end.addingDays(1))
     }
 
     private func insert(_ period: BudgetPeriod, schedule: PeriodSchedule, in db: Database) throws {
