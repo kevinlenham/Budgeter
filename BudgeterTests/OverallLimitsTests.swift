@@ -21,7 +21,8 @@ struct OverallLimitsTests {
     func noLimitIsNil() throws {
         let database = try Fixture.database()
         try database.writer.read { db in
-            #expect(try OverallLimits().limit(on: try date("2026-09-01"), in: db) == nil)
+            let limit = try OverallLimits().limit(on: try date("2026-09-01"), in: db)
+            #expect(limit == nil)
         }
     }
 
