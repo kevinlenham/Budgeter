@@ -121,10 +121,23 @@ struct CadenceSwitchView: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Switch", action: apply)
-                    .disabled(chosen == current || isSaving)
+                    .disabled(!isSwitchable || isSaving)
             }
         }
         .task(id: chosen) { await reload() }
+    }
+
+    /// Enabled only when there is a loaded plan that describes *this* picker
+    /// selection and actually changes something.
+    ///
+    /// Deliberately not `chosen != current`. `current` is what Settings believed
+    /// the cadence was when it built this screen; `plan` is what the database says,
+    /// for the cadence currently selected. Keying the button off the plan is what
+    /// makes it impossible to commit a plan for a cadence that is no longer on
+    /// screen — the failure below.
+    private var isSwitchable: Bool {
+        guard let plan else { return false }
+        return plan.to == chosen && plan.from != plan.to
     }
 
     private func shortDate(_ date: CivilDate) -> String {
@@ -154,13 +167,28 @@ struct CadenceSwitchView: View {
     /// screen depends on which cadence is being switched *to*. Writes nothing —
     /// `CadenceSwitch.plan` exists precisely so this screen can show the
     /// consequences before any of them happen.
+    ///
+    /// Clears `plan` *before* reading, and never leaves a stale one behind on
+    /// failure. A plan is a proposal for one specific cadence, so a plan for the
+    /// previous selection is not a worse version of this one — it is an answer to a
+    /// different question, and `apply` cannot tell the difference. GRDB 7 cancels an
+    /// in-flight read when `.task(id:)` cancels this task, which is what a quick
+    /// second tap on the segmented picker does, so "the read for the cadence on
+    /// screen failed while an older one succeeded" is the ordinary case, not an
+    /// exotic one.
     private func reload() async {
+        plan = nil
+        errorMessage = nil
+        overallAmount = ""
+        amounts = [:]
         do {
             let today = CivilDate.today()
             let cadence = chosen
             let loaded = try await database.writer.read { db in
                 try CadenceSwitch().plan(to: cadence, asOf: today, in: db)
             }
+            // The picker may have moved again while the read was in flight.
+            guard cadence == chosen else { return }
             plan = loaded
             // No suggestion means nothing to scale, and the field shows its "None"
             // placeholder — the honest reading, since a zero would be a decision
@@ -172,6 +200,9 @@ struct CadenceSwitchView: View {
                 }
             }
             errorMessage = nil
+        } catch is CancellationError {
+            // The picker moved again and this read was superseded. Not a failure to
+            // report — another reload is already running for the new selection.
         } catch {
             errorMessage = String(describing: error)
         }
@@ -185,7 +216,17 @@ struct CadenceSwitchView: View {
     }
 
     private func apply() {
-        guard let plan else { return }
+        // Re-asserted rather than trusted to `isSwitchable` having disabled the
+        // button: a plan for the wrong cadence commits a switch the user did not
+        // ask for, and a plan whose `from` equals its `to` truncates the period in
+        // progress to change nothing at all — a switch that looks like it did
+        // nothing while quietly ending today's period. Neither is worth leaving to
+        // the toolbar. Reported, never a silent `return`: "the button did nothing"
+        // is the symptom this whole guard exists to stop.
+        guard let plan, plan.to == chosen, plan.from != plan.to else {
+            errorMessage = "Could not read your current budget period. Go back and try again."
+            return
+        }
         isSaving = true
 
         let overallCurrency = plan.overallCurrent?.currency ?? plan.overallSuggested?.currency ?? .aud
