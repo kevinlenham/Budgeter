@@ -18,6 +18,10 @@ nonisolated enum CategoryLimitError: Error, Equatable {
     /// A limit was backdated before the one it would replace. Ranges are closed
     /// forward only (DEC-007's governing principle), so this is refused rather
     /// than resolved by guessing which row should win.
+    ///
+    /// Only ever a row that has genuinely already applied. A row whose start date
+    /// is still in the future has governed no period, and `setLimit` retires it
+    /// rather than reporting this — see `retireNeverApplied`.
     case notAfterCurrentLimit(effectiveFrom: String, currentFrom: String)
 }
 
@@ -27,11 +31,11 @@ nonisolated struct CategoryLimits: Sendable {
 
     /// Sets a category's limit from `effectiveFrom` onward.
     ///
-    /// `effectiveFrom` is a boundary date, not today: DEC-008 has a cadence switch
-    /// take effect at the next period boundary, so the caller passes that date and
-    /// the change simply sits in the table until the boundary arrives. Nothing
-    /// special happens on the day — the period generated then reads the row that
-    /// has become current, which is the whole point of storing ranges.
+    /// `effectiveFrom` is a boundary date, not necessarily today: the Budget tab's
+    /// editors pass the current period's start, and `CadenceSwitch` passes the day
+    /// the new cadence begins (DEC-043: today). The period that starts on or after
+    /// it reads the row that has become current, which is the whole point of
+    /// storing ranges rather than a single value.
     func setLimit(
         categoryID: UUID,
         amount: Money,
@@ -39,6 +43,7 @@ nonisolated struct CategoryLimits: Sendable {
         in db: Database
     ) throws {
         let timestamp = IngestFunnel.iso8601.format(now())
+        try retireNeverApplied(categoryID: categoryID, before: effectiveFrom, timestamp: timestamp, in: db)
 
         let current = try Row.fetchOne(
             db,
@@ -102,6 +107,87 @@ nonisolated struct CategoryLimits: Sendable {
     }
 
     // MARK: - Private
+
+    /// Retires an open limit that starts *after* `effectiveFrom`, and reopens
+    /// whichever row it closed, so the ordinary forward-only path below is reached
+    /// with a genuinely current row in front of it.
+    ///
+    /// DEC-008's forward-only rule protects **history**: a past period must keep
+    /// showing the limit that applied then. A row whose `effective_from` has not
+    /// arrived yet has applied to nothing: no period has started under it, so none
+    /// snapshotted it, and superseding it rewrites no history at all.
+    /// Refusing it was the strictly wrong reading of the rule, and it was refusing
+    /// a whole `CadenceSwitch.apply` transaction: a switch that reported
+    /// `notAfterCurrentLimit` and rolled back everything, which on screen is a
+    /// Switch button that changes nothing.
+    ///
+    /// Reachable because DEC-043's first implementation deferred a cadence switch
+    /// to the next calendar boundary and wrote its new limits effective from that
+    /// future date. The revision made switches instant and deleted the machinery
+    /// that would have promoted those rows, but a database written by the earlier
+    /// build still holds them, dated ahead of today, blocking every subsequent
+    /// switch. Healed on use rather than by a migration, for the reason
+    /// `Migration006` heals rather than asks for a reinstall — and because "a limit
+    /// that never took effect does not outrank one that is being set now" is a rule
+    /// worth stating once here, not a one-off repair.
+    ///
+    /// Tombstoned, never deleted (invariant 3), and the previous row is reopened
+    /// only after the tombstone lands so `idx_category_limits_open` never sees two
+    /// open rows for one category. Loops because more than one row can be stranded
+    /// ahead of today; each pass retires the open row and reopens one starting
+    /// strictly earlier, so it always terminates.
+    private func retireNeverApplied(
+        categoryID: UUID, before effectiveFrom: CivilDate, timestamp: String, in db: Database
+    ) throws {
+        // Strictly after today, not merely after `effectiveFrom`. A row starting
+        // today is in force today — `limit(categoryID:on:)` returns it and the
+        // Budget tab shows it — so setting a limit from an earlier date is real
+        // backdating and still belongs to `close`'s refusal. Only a start date that
+        // has not arrived describes a decision nothing has acted on.
+        let today = CivilDate(localDayOf: now())
+        while true {
+            let open = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT id, effective_from
+                  FROM category_limits
+                 WHERE category_id = ?
+                   AND effective_to IS NULL
+                   AND deleted_at IS NULL
+                """,
+                arguments: [categoryID.uuidString]
+            )
+            guard let open,
+                  (open["effective_from"] as String) > today.iso,
+                  (open["effective_from"] as String) > effectiveFrom.iso
+            else { return }
+            let openFrom: String = open["effective_from"]
+
+            try db.execute(
+                sql: """
+                UPDATE category_limits
+                   SET deleted_at = ?, updated_at = ?, change_seq = ?
+                 WHERE id = ?
+                """,
+                arguments: [
+                    timestamp, timestamp, try AppDatabase.nextChangeSeq(db), open["id"] as String,
+                ]
+            )
+            // The row this one closed, if there was one: ranges are half-open, so it
+            // was closed at exactly the retired row's start date. At most one row can
+            // match, because the ranges for a category never overlap.
+            try db.execute(
+                sql: """
+                UPDATE category_limits
+                   SET effective_to = NULL, updated_at = ?, change_seq = ?
+                 WHERE category_id = ? AND deleted_at IS NULL AND effective_to = ?
+                """,
+                arguments: [
+                    timestamp, try AppDatabase.nextChangeSeq(db), categoryID.uuidString, openFrom,
+                ]
+            )
+        }
+    }
 
     /// Revises the open limit in place, for a change effective from the date it
     /// already starts on.

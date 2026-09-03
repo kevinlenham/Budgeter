@@ -21,9 +21,10 @@ nonisolated struct OverallLimits: Sendable {
     /// Sets the overall limit from `effectiveFrom` onward. Same rules as
     /// `CategoryLimits.setLimit`: revising the date already open amends it in
     /// place, anything else closes the current row and opens a new one, and a date
-    /// not after the current one's start is refused outright.
+    /// before a row that has already taken effect is refused outright.
     func setLimit(amount: Money, effectiveFrom: CivilDate, in db: Database) throws {
         let timestamp = IngestFunnel.iso8601.format(now())
+        try retireNeverApplied(before: effectiveFrom, timestamp: timestamp, in: db)
 
         let current = try Row.fetchOne(
             db,
@@ -73,6 +74,48 @@ nonisolated struct OverallLimits: Sendable {
     }
 
     // MARK: - Private
+
+    /// `CategoryLimits.retireNeverApplied` without the category dimension — see the
+    /// full reasoning there. Same rule: a limit whose start date has not arrived has
+    /// governed no period, so setting one from an earlier date supersedes it rather
+    /// than being refused.
+    private func retireNeverApplied(before effectiveFrom: CivilDate, timestamp: String, in db: Database) throws {
+        let today = CivilDate(localDayOf: now())
+        while true {
+            let open = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT id, effective_from
+                  FROM overall_limits
+                 WHERE effective_to IS NULL AND deleted_at IS NULL
+                """
+            )
+            guard let open,
+                  (open["effective_from"] as String) > today.iso,
+                  (open["effective_from"] as String) > effectiveFrom.iso
+            else { return }
+            let openFrom: String = open["effective_from"]
+
+            try db.execute(
+                sql: """
+                UPDATE overall_limits
+                   SET deleted_at = ?, updated_at = ?, change_seq = ?
+                 WHERE id = ?
+                """,
+                arguments: [
+                    timestamp, timestamp, try AppDatabase.nextChangeSeq(db), open["id"] as String,
+                ]
+            )
+            try db.execute(
+                sql: """
+                UPDATE overall_limits
+                   SET effective_to = NULL, updated_at = ?, change_seq = ?
+                 WHERE deleted_at IS NULL AND effective_to = ?
+                """,
+                arguments: [timestamp, try AppDatabase.nextChangeSeq(db), openFrom]
+            )
+        }
+    }
 
     private func amend(_ current: Row, to amount: Money, timestamp: String, in db: Database) throws {
         try db.execute(
