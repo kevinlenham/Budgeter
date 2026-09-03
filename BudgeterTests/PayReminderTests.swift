@@ -61,7 +61,8 @@ struct PayReminderQueueTests {
             schedule: onSchedule, today: payday,
             reminderTime: try time("09:00"), currentTime: try time("09:30")
         )
-        #expect(afterNine.first == try date("2026-09-25"))
+        let nextPayday = try date("2026-09-25")
+        #expect(afterNine.first == nextPayday)
     }
 
     @Test("the queue stays well inside the 64 pending notifications iOS allows")
@@ -221,7 +222,7 @@ struct PayStatusTests {
 @Suite("Times of day")
 struct TimeOfDayTests {
     @Test("the storage format round-trips")
-    func roundTrip() throws {
+    func roundTrip() {
         for iso in ["00:00", "09:00", "09:05", "23:59"] {
             #expect(TimeOfDay(iso: iso)?.iso == iso)
         }

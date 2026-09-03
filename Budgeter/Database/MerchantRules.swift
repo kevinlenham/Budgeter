@@ -135,7 +135,10 @@ nonisolated struct MerchantRules: Sendable {
 
         let existing = try Row.fetchOne(
             db,
-            sql: "SELECT id, category_id FROM merchant_rules WHERE merchant_key = ? AND deleted_at IS NULL",
+            sql: """
+            SELECT id, category_id, hit_count FROM merchant_rules
+             WHERE merchant_key = ? AND deleted_at IS NULL
+            """,
             arguments: [key]
         )
 

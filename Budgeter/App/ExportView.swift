@@ -18,6 +18,7 @@
 //  itself.
 //
 
+import GRDB
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -113,7 +114,11 @@ struct ExportView: View {
             // sandbox, and reading it without this returns a permissions error that
             // looks like a corrupt backup.
             let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            defer {
+                if scoped {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
 
             let data = try Data(contentsOf: url)
             Task {

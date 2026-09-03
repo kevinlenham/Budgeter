@@ -107,9 +107,11 @@ struct CadenceSwitchTests {
             )
 
             let today = try date("2026-09-02")
-            let before = try #require(try Queries.budgetLines(
-                periodID: try #require(try Queries.period(containing: today, in: db)).id, in: db
-            ).first { $0.categoryId == groceries.uuidString })
+            let periodBefore = try #require(try Queries.period(containing: today, in: db))
+            let before = try #require(
+                try Queries.budgetLines(periodID: periodBefore.id, in: db)
+                    .first { $0.categoryId == groceries.uuidString }
+            )
 
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: today, in: db)
             try CadenceSwitch().apply(

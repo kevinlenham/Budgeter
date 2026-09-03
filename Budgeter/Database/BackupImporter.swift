@@ -277,7 +277,7 @@ nonisolated struct BackupImporter: Sendable {
             document.merchantRules.map(\.changeSeq).max(),
             document.transactions.map(\.changeSeq).max(),
         ]
-        .compactMap { $0 }
+        .compactMap(\.self)
         .max()
 
         guard let highest else { return }

@@ -32,10 +32,10 @@ final class PayReminderRouter: NSObject, UNUserNotificationCenterDelegate {
         switch response.actionIdentifier {
         case PayReminderContent.remindTomorrowAction:
             await onRemindTomorrow()
-        // A plain tap on the notification body arrives as `defaultActionIdentifier`
+        // A plain tap on the notification body arrives as `UNNotificationDefaultActionIdentifier`
         // and means the same thing as "Log now" — the user opened the app because
         // it asked them to log their pay.
-        case PayReminderContent.logNowAction, UNNotificationResponse.defaultActionIdentifier:
+        case PayReminderContent.logNowAction, UNNotificationDefaultActionIdentifier:
             onLogNow()
         default:
             break
