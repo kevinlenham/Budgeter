@@ -212,4 +212,60 @@ struct PeriodGeneratorTests {
             #expect(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM period_limits") == 0)
         }
     }
+
+    @Test("a retired period stops holding its start date, so a replacement can take it")
+    func tombstonedPeriodsDoNotReserveTheirStartDate() throws {
+        // `idx_periods_starts_on` was unconditional until migration 6, while
+        // `trg_periods_no_overlap` had always ignored tombstones. The disagreement
+        // only surfaced once DEC-043 gave `CadenceSwitch` a reason to retire a
+        // period: a same-day replacement was then refused by the index.
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configure(db, anchor: "2026-01-05", cadence: .weekly)
+            try PeriodGenerator().generate(through: try date("2026-01-05"), in: db)
+
+            let retiring = try #require(try Queries.period(containing: try date("2026-01-05"), in: db))
+            try db.execute(
+                sql: "UPDATE periods SET deleted_at = '2026-01-05T00:00:00.000Z' WHERE id = ?",
+                arguments: [retiring.id]
+            )
+
+            // Same start date, different cadence — exactly what a switch produces.
+            try db.execute(
+                sql: """
+                INSERT INTO periods (id, starts_on, ends_on, cadence, anchor_on,
+                                     created_at, updated_at, change_seq)
+                VALUES (?, '2026-01-05', '2026-02-04', 'monthly', '2026-01-05',
+                        '2026-01-05T00:00:00.000Z', '2026-01-05T00:00:00.000Z', 0)
+                """,
+                arguments: [UUIDv7.generate().uuidString]
+            )
+
+            let current = try #require(try Queries.period(containing: try date("2026-01-05"), in: db))
+            #expect(current.cadence == "monthly")
+        }
+    }
+
+    @Test("two live periods still cannot share a start date")
+    func livePeriodsStillCannotShareAStartDate() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configure(db, anchor: "2026-01-05", cadence: .weekly)
+            try PeriodGenerator().generate(through: try date("2026-01-05"), in: db)
+
+            // Narrowing the index to live rows must not have narrowed it away: a
+            // second *live* period on 5 January is still refused.
+            #expect(throws: DatabaseError.self) {
+                try db.execute(
+                    sql: """
+                    INSERT INTO periods (id, starts_on, ends_on, cadence, anchor_on,
+                                         created_at, updated_at, change_seq)
+                    VALUES (?, '2026-01-05', '2026-01-11', 'weekly', '2026-01-05',
+                            '2026-01-05T00:00:00.000Z', '2026-01-05T00:00:00.000Z', 0)
+                    """,
+                    arguments: [UUIDv7.generate().uuidString]
+                )
+            }
+        }
+    }
 }

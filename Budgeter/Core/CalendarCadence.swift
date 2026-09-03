@@ -38,7 +38,14 @@ nonisolated enum CalendarCadence {
         case .monthly:
             today.startOfMonth()
         case .fortnightly:
-            isSecondWeek ? today.mostRecentMonday().addingDays(-7) : today.mostRecentMonday()
+            // Spelled out rather than as a ternary: SwiftLint reads a ternary whose
+            // branches are both calls as a discarded pair of Void calls, and the two
+            // adjacent Mondays are the point of this case anyway.
+            if isSecondWeek {
+                today.mostRecentMonday().addingDays(-7)
+            } else {
+                today.mostRecentMonday()
+            }
         }
     }
 }

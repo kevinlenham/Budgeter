@@ -198,7 +198,6 @@ struct CalendarCadenceTests {
         #expect(weekTwo == (try date("2026-09-07")))
         #expect(weekOne.days(until: weekTwo) == -7)
     }
-
 }
 
 @Suite("Integer helpers")
