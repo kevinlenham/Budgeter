@@ -23,8 +23,8 @@ nonisolated struct BudgetSettings: Equatable, Sendable {
     var schedule: PeriodSchedule?
     /// DEC-036's separate pay schedule. Nil until the user confirms it.
     var paySchedule: PeriodSchedule?
-    /// Local wall-clock time, `HH:MM`, for the payday reminder.
-    var payReminderTime: String?
+    /// When the payday reminder fires, in local wall-clock time (DEC-036).
+    var payReminderTime: TimeOfDay?
     /// Off by default. DEC-036 requests notification permission at the moment this
     /// is enabled, never at first launch.
     var payReminderEnabled: Bool = false
@@ -40,7 +40,7 @@ nonisolated struct BudgetSettingsStore: Sendable {
         return BudgetSettings(
             schedule: try Self.schedule(anchor: row["anchor_on"], cadence: row["cadence"]),
             paySchedule: try Self.schedule(anchor: row["pay_anchor_on"], cadence: row["pay_cadence"]),
-            payReminderTime: row["pay_reminder_time"],
+            payReminderTime: try Self.time(row["pay_reminder_time"]),
             payReminderEnabled: row["pay_reminder_enabled"] != 0
         )
     }
@@ -64,12 +64,23 @@ nonisolated struct BudgetSettingsStore: Sendable {
                 settings.schedule?.cadence.rawValue,
                 settings.paySchedule?.anchor.iso,
                 settings.paySchedule?.cadence.rawValue,
-                settings.payReminderTime,
+                settings.payReminderTime?.iso,
                 settings.payReminderEnabled ? 1 : 0,
                 IngestFunnel.iso8601.format(now()),
                 try AppDatabase.nextChangeSeq(db),
             ]
         )
+    }
+
+    /// The stored `HH:MM`, parsed as strictly as the column's CHECK accepts it —
+    /// so a value that somehow got past the constraint is reported rather than
+    /// silently becoming midnight.
+    private static func time(_ stored: String?) throws -> TimeOfDay? {
+        guard let stored else { return nil }
+        guard let time = TimeOfDay(iso: stored) else {
+            throw BudgetSettingsError.malformedStoredValue(stored)
+        }
+        return time
     }
 
     /// Both halves or neither — the same pairing the table's CHECK enforces, so a

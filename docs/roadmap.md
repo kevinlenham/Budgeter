@@ -108,13 +108,14 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 - Category CRUD, limit editing, and the cadence-switch confirmation screen (DEC-008)
 - `merchant_rules` — normalised merchant → category, written on every confirm or correction (DEC-030)
 - Rules viewable and editable by the user
-- **JSON/CSV export** via `FileManager` + a share sheet (`UIActivityViewController`). DEC-002 chose durability over sync and explicitly notes that durability *requires the export feature to actually be built, not assumed*. Until this ships, the no-sync decision is unbacked and you have one copy of the data and a hope.
-- Round-trip test: export, then re-import your own export
+- **JSON/CSV export** via `FileManager` + a share sheet (`ShareLink`). DEC-002 chose durability over sync and explicitly notes that durability *requires the export feature to actually be built, not assumed*. Until this ships, the no-sync decision is unbacked and you have one copy of the data and a hope.
+- Round-trip test: export, then re-import your own export. The re-import does **not** go through the Sprint 1 funnel — DEC-042 explains why a restore is not an ingestion, and what keeps it idempotent instead.
+- A **settings tab**, which Sprint 3 left the app without: until it exists, nothing collected during onboarding can be changed afterwards
 
 - **Payday reminders** (DEC-036): pay schedule settings, permission requested at enable time (DEC-024), the rolling `UNUserNotificationCenter` queue topped up on launch, a "Log now" deep link to a blank income form, and "Remind me tomorrow"
 - The in-app fallback card — "no pay logged since 14 March" — shown regardless of notification permission
 
-**Done when** exporting and re-importing produces an identical dataset with zero duplicate rows — which also exercises the Sprint 1 funnel — and one real payday reminder has fired on your phone and been logged through.
+**Done when** exporting and re-importing produces an identical dataset with zero duplicate rows — asserted as byte-for-byte identity of a re-export, which DEC-042's id-preserving restore makes possible — and one real payday reminder has fired on your phone and been logged through.
 
 **Watch for**
 - No local team needed: `UNUserNotificationCenter` is unrelated to APNs and works under free provisioning. DEC-034's "Push Notifications require a paid team" does not apply here.

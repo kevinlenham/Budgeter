@@ -930,6 +930,37 @@ Deferring to the next boundary is DEC-008's rule for a *cadence switch*, and the
 
 ---
 
+## DEC-042 — A restore is not an ingestion
+
+**Context** — Sprint 4's roadmap entry says the export round-trip "also exercises the Sprint 1 funnel", assuming a re-import of our own backup would be pushed through `IngestFunnel` like any other incoming data. Rule 3 makes that the default reading: *all ingestion goes through the single upsert funnel.* Implementing the importer showed the assumption to be wrong.
+
+**Options considered**
+- Push every restored transaction through `IngestFunnel`
+- Insert restored rows verbatim, skipping any identity already present
+- Restore verbatim, but re-run the funnel afterwards to reconcile
+
+**Choice** — Restored rows are inserted verbatim, keeping their original ids, timestamps and `change_seq`. Nothing is inserted whose identity is already present, checked against both the primary key and DEC-005's `(account, source, dedupe_key)` index.
+
+**Reasoning**
+
+The funnel's own doc comment defines its input as "a transaction on its way in, **before** it has an identity in our database". A row from our own export already has one. Pushing it through the funnel would mint a fresh UUIDv7 and fresh timestamps for a row that has both — and because `category_limits`, `period_limits` and `transactions` all reference ids, a restore that renumbers everything would have to rewrite every reference on the way past. A restore that keeps ids has nothing to rewrite. The renumbering version is strictly more code doing strictly more damage.
+
+It also loses information the backup exists to carry. `change_seq` is DEC-006's sync-readiness insurance; regenerating it on restore makes "what changed since N" meaningless across the restore boundary. `created_at` becomes the restore date rather than the date the user spent the money.
+
+Rule 3 is not weakened, because rule 3 is about *ingestion* — observations of external events arriving from a bank, a CSV or a card tap, where two sources may describe the same purchase and something has to decide they are the same. A backup contains no observations. It contains rows this database already wrote once.
+
+**What is kept.** The idempotency the funnel would have provided is kept by the same means the funnel uses: an identity check before every insert. Re-importing the same file twice inserts nothing the second time, and a transaction whose dedupe slot is occupied is skipped rather than allowed to violate the index and abort the restore. Tombstones are exported and restored, so DEC-005's rule that a deletion survives re-import holds across a restore too.
+
+**Settings are applied only into a database that has none.** Restoring into a configured database leaves its anchor and cadence alone: overwriting them would move where future periods fall while the periods already generated stay put, which is what DEC-007's governing principle exists to prevent. Merging two people's budgets is not a feature; restoring one person's is.
+
+**Consequences**
+- `BackupImporter` is a second write path for transaction rows, and the only one other than the funnel. It is restricted to rows carrying an id this database issued.
+- The backup format is versioned and a newer version is refused outright, because a backup half-understood is worse than one that will not open — the user believes their data is restored.
+- The local `change_counter` is advanced past the highest restored `change_seq`, or the next local write reuses a number an imported row already holds.
+- The round-trip test asserts byte-for-byte identity of a re-export, which is only possible because ids and timestamps are preserved. Under the funnel the strongest available assertion would have been "the same amounts, in some order".
+
+---
+
 # Open items
 
 | Item | Status | Resolution path |

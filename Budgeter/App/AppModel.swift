@@ -14,6 +14,7 @@
 import Foundation
 import GRDB
 import SwiftUI
+import UserNotifications
 
 @MainActor
 @Observable
@@ -29,8 +30,19 @@ final class AppModel {
     private(set) var phase: Phase = .loading
     private(set) var settings = BudgetSettings()
 
-    init(database: AppDatabase) {
+    /// Set when a payday reminder has asked for an income entry (DEC-036). The
+    /// ledger presents a blank income form while it is true and clears it on
+    /// dismissal — a route rather than a call, so the form is presented by whatever
+    /// is on screen rather than by a notification handler reaching into the view
+    /// hierarchy.
+    var isLoggingPay = false
+
+    let reminders: PayReminderService
+    private let router = PayReminderRouter()
+
+    init(database: AppDatabase, scheduler: any PayReminderScheduling = SystemPayReminderScheduler()) {
         self.database = database
+        reminders = PayReminderService(scheduler: scheduler)
     }
 
     /// The on-device database, in Application Support so it is covered by encrypted
@@ -45,8 +57,10 @@ final class AppModel {
         return try AppModel(database: .onDisk(at: directory.appending(path: "budgeter.sqlite")))
     }
 
-    /// Loads settings and fills in any periods missing since the last launch.
+    /// Loads settings, fills in any periods missing since the last launch, and tops
+    /// up the payday reminder queue (DEC-036).
     func start() async {
+        connectReminderActions()
         do {
             let today = CivilDate.today()
             let settings = try await database.writer.write { db -> BudgetSettings in
@@ -60,7 +74,14 @@ final class AppModel {
             phase = settings.schedule == nil ? .onboarding : .ready
         } catch {
             phase = .failed(String(describing: error))
+            return
         }
+
+        // Deliberately after `phase` is set, and deliberately not fatal. A queue
+        // that could not be topped up is a reminder that does not fire, which
+        // DEC-036 already requires the in-app card to cover; a launch that fails
+        // because of it would be a much worse trade.
+        try? await reminders.refresh(in: database)
     }
 
     /// Writes the answers onboarding collected, then starts generating periods.
@@ -85,6 +106,34 @@ final class AppModel {
         } catch {
             phase = .failed(String(describing: error))
         }
+    }
+
+    /// Re-reads the settings row after a screen has changed it.
+    ///
+    /// Not `start()`: that regenerates periods and resets `phase`, which would drop
+    /// the user back to a spinner every time they toggled a switch. The settings
+    /// screens own their own writes and call this afterwards.
+    func reloadSettings() async {
+        guard let settings = try? await database.writer.read({ db in
+            try BudgetSettingsStore().load(db)
+        }) else { return }
+        self.settings = settings
+    }
+
+    // MARK: - Reminders
+
+    /// Points the notification delegate at this model. Done on every `start()`
+    /// rather than in `init`, because the delegate must be set before iOS delivers
+    /// a response and `init` may run before the scene exists.
+    private func connectReminderActions() {
+        router.onLogNow = { [weak self] in
+            self?.isLoggingPay = true
+        }
+        router.onRemindTomorrow = { [weak self] in
+            guard let self else { return }
+            try? await reminders.snoozeUntilTomorrow(in: database)
+        }
+        UNUserNotificationCenter.current().delegate = router
     }
 }
 
