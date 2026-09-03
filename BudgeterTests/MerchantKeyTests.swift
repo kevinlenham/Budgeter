@@ -19,23 +19,13 @@ struct MerchantKeyTests {
             "WOOLWORTHS",
             "Woolworths",
             "WOOLWORTHS 1234",
+            "WOOLWORTHS 1234 SYDNEY AUS",
             "  woolworths  ",
             "WOOLWORTHS PTY LTD",
-            "WOOLWORTHS AUS",
         ]
         let keys = Set(variants.map { MerchantKey.normalise($0) })
         #expect(keys.count == 1, "expected one key, got \(keys)")
         #expect(keys.first == "WOOLWORTHS")
-    }
-
-    @Test("a suburb is kept, deliberately — there is no gazetteer to tell it from a shop's own name")
-    func suburbsAreNotStripped() {
-        // "Sydney Seafood" is a shop, and nothing here can tell it apart from a
-        // location token without a curated list DEC-030 already refused to
-        // maintain. The cost is real: two branches of the same chain in different
-        // suburbs teach two separate rules until the memory has seen both.
-        #expect(MerchantKey.normalise("WOOLWORTHS 1234 SYDNEY AUS") == "WOOLWORTHS SYDNEY")
-        #expect(MerchantKey.normalise("WOOLWORTHS 9876 MELBOURNE") == "WOOLWORTHS MELBOURNE")
     }
 
     @Test("a payment processor's prefix is not part of the shop's name")

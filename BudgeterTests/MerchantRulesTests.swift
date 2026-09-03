@@ -23,14 +23,12 @@ struct MerchantRulesTests {
             try Fixture.onboard(db)
             let groceries = try Fixture.category("Groceries", in: db)
 
-            try MerchantRules().remember(merchant: "WOOLWORTHS 1234", categoryID: groceries, in: db)
+            try MerchantRules().remember(merchant: "WOOLWORTHS 1234 SYDNEY", categoryID: groceries, in: db)
 
             // The whole point of normalising: the second sighting almost never
-            // matches the first byte for byte. A different suburb is deliberately
-            // its own key (`MerchantKey.suburbsAreNotStripped`), so this only tests
-            // what the key does strip: store numbers and case.
+            // matches the first byte for byte.
             #expect(try MerchantRules().suggestion(forMerchant: "Woolworths", in: db) == groceries)
-            #expect(try MerchantRules().suggestion(forMerchant: "WOOLWORTHS 9876", in: db) == groceries)
+            #expect(try MerchantRules().suggestion(forMerchant: "WOOLWORTHS 9876 MELBOURNE", in: db) == groceries)
         }
     }
 
@@ -60,30 +58,10 @@ struct MerchantRulesTests {
             try Fixture.onboard(db)
             let groceries = try Fixture.category("Groceries", in: db)
 
-            for merchant in ["WOOLWORTHS", "Woolworths 1234", "WOOLWORTHS AUS"] {
+            for merchant in ["WOOLWORTHS", "Woolworths 1234", "WOOLWORTHS SYDNEY AUS"] {
                 try MerchantRules().remember(merchant: merchant, categoryID: groceries, in: db)
             }
             #expect(try MerchantRules().all(in: db).count == 1)
-        }
-    }
-
-    @Test("two branches of the same chain teach two rules, because suburbs are kept")
-    func differentBranchesAreDifferentRules() throws {
-        let database = try Fixture.database()
-        try database.writer.write { db in
-            try Fixture.onboard(db)
-            let groceries = try Fixture.category("Groceries", in: db)
-
-            // `MerchantKey` cannot tell a suburb from part of a shop's own name
-            // without a gazetteer, and DEC-030 already refused to maintain one — so
-            // this is the accepted cost, not a bug: a chain the user visits in two
-            // suburbs teaches the memory twice.
-            try MerchantRules().remember(merchant: "WOOLWORTHS 1234 SYDNEY", categoryID: groceries, in: db)
-            try MerchantRules().remember(merchant: "WOOLWORTHS 9876 MELBOURNE", categoryID: groceries, in: db)
-
-            #expect(try MerchantRules().all(in: db).count == 2)
-            #expect(try MerchantRules().suggestion(forMerchant: "WOOLWORTHS 1111 SYDNEY", in: db) == groceries)
-            #expect(try MerchantRules().suggestion(forMerchant: "WOOLWORTHS 2222 MELBOURNE", in: db) == groceries)
         }
     }
 
