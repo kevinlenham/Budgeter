@@ -79,8 +79,13 @@ struct CategoriesView: View {
         }
         .alert("Rename category", isPresented: .init(
             get: { renaming != nil },
+<<<<<<< HEAD
             set: { isPresented in
                 if !isPresented {
+=======
+            set: {
+                if !$0 {
+>>>>>>> 867a6b04bb491937be4316de55c6d9871f9e8c2d
                     renaming = nil
                 }
             }

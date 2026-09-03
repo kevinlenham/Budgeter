@@ -18,6 +18,7 @@
 //  itself.
 //
 
+import GRDB
 import SwiftUI
 import UniformTypeIdentifiers
 

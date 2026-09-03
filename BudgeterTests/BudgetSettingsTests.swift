@@ -38,7 +38,7 @@ struct BudgetSettingsTests {
             var settings = try store.load(db)
             settings.schedule = PeriodSchedule(anchor: try date("2026-03-13"), cadence: .fortnightly)
             settings.paySchedule = PeriodSchedule(anchor: try date("2026-03-13"), cadence: .fortnightly)
-            settings.payReminderTime = "09:00"
+            settings.payReminderTime = try #require(TimeOfDay(iso: "09:00"))
             settings.payReminderEnabled = true
             try store.save(settings, in: db)
 

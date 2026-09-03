@@ -21,6 +21,7 @@
 //    that the user chooses the numbers rather than finding them chosen.
 //
 
+import GRDB
 import SwiftUI
 
 struct CadenceSwitchView: View {
@@ -144,14 +145,15 @@ struct CadenceSwitchView: View {
         // suggestion is absent exactly when there was no limit to scale, and
         // inventing a zero limit would budget the user to nothing without them
         // typing a number.
-        var limits: [UUID: Money] = [:]
+        var collected: [UUID: Money] = [:]
         for line in plan.lines {
             let currency = line.currentLimit?.currency ?? line.suggestedLimit?.currency ?? .aud
             guard let text = amounts[line.categoryID]?.trimmedOrNil,
                   let amount = try? MoneyText.money(from: text, currency: currency)
             else { continue }
-            limits[line.categoryID] = amount
+            collected[line.categoryID] = amount
         }
+        let limits = collected
 
         Task {
             do {

@@ -18,6 +18,7 @@
 //  the feature to degrade rather than break. It is said plainly on screen instead.
 //
 
+import GRDB
 import SwiftUI
 
 struct PayReminderView: View {
