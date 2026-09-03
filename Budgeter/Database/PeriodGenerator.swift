@@ -10,7 +10,7 @@
 //
 //  All of the arithmetic lives in `PeriodSchedule` and `CalendarCadence`, which know
 //  nothing about SQLite. This type only decides *which* indices are missing and
-//  writes them — and, since DEC-043, whether a pending cadence switch has arrived.
+//  writes them.
 //
 
 import Foundation
@@ -30,34 +30,9 @@ nonisolated struct PeriodGenerator: Sendable {
     /// independently.
     @discardableResult
     func generate(through today: CivilDate, in db: Database) throws -> [BudgetPeriod] {
-        var settings = try settingsStore.load(db)
-        guard let schedule = settings.schedule else {
+        guard let schedule = try settingsStore.load(db).schedule else {
             throw BudgetSettingsError.notConfigured
         }
-
-        // DEC-043: a switch is confirmed the moment the user chooses it, but the
-        // schedule it produces only takes over once its anchor actually arrives.
-        if let pending = settings.pendingSchedule {
-            guard pending.anchor <= today else {
-                // Still waiting. `CadenceSwitch.apply` already extended the
-                // currently-stored period's `ends_on` to reach the day before
-                // `pending.anchor`, so there is nothing left to fill in — and the
-                // *old* schedule must not be asked to try. Its own natural next
-                // period is computed from its own cadence, which the extension was
-                // never aligned to, so a naive attempt can propose a period that
-                // overlaps the one just extended. Doing nothing here is not a
-                // shortcut; it is the only correct answer until the boundary
-                // arrives.
-                return []
-            }
-
-            settings.schedule = pending
-            settings.pendingSchedule = nil
-            try settingsStore.save(settings, in: db)
-
-            return try generate(using: pending, through: today, in: db)
-        }
-
         return try generate(using: schedule, through: today, in: db)
     }
 
@@ -103,14 +78,13 @@ nonisolated struct PeriodGenerator: Sendable {
     ///
     /// Deliberately keyed off the day after the last period *ends*, not off the
     /// last period's own start reinterpreted under `schedule`. Those agree as long
-    /// as `schedule` never changes, but after a DEC-008 cadence switch `schedule`'s
+    /// as `schedule` never changes, but after a DEC-043 cadence switch `schedule`'s
     /// anchor has no relationship to a period stored under the old one — indexing
     /// the old start under the new schedule can land on an index whose period
     /// overlaps the row already on disk, which the `trg_periods_no_overlap` trigger
-    /// then rejects. The boundary date is schedule-agnostic: DEC-043's pending
-    /// switch always extends the last old period to end the day before the new
-    /// schedule's anchor, precisely so the new schedule's first period starts
-    /// there and nowhere else.
+    /// then rejects. The boundary date is schedule-agnostic: `CadenceSwitch.apply`
+    /// truncates the old period to end the day before the new schedule's anchor,
+    /// precisely so the new schedule's first period starts there and nowhere else.
     private func firstMissingIndex(for schedule: PeriodSchedule, today: CivilDate, in db: Database) throws -> Int {
         let latest = try String.fetchOne(db, sql: """
         SELECT ends_on

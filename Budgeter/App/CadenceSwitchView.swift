@@ -6,22 +6,23 @@
 //  for existing is a decision recorded in the design doc rather than a feature
 //  anyone asked for.
 //
-//  DEC-008 rejected three simpler options. Switching immediately would truncate the
-//  current period, so "spent this period" jumps for invisible reasons. Silent
-//  scaling produces numbers no human chose. Resetting every limit throws away the
-//  user's setup, and most people abandon the switch rather than redo it. What is
-//  left — wait for the boundary, and prompt with a sensible pre-fill — is the only
-//  option that is both correct and kind, and it costs exactly this screen.
+//  DEC-008 originally rejected switching immediately, on the grounds that it would
+//  truncate the current period and make "spent this period" jump for invisible
+//  reasons. DEC-043 revisits that: waiting for a boundary meant waiting up to three
+//  weeks for a switch to monthly, which felt broken rather than careful. Truncating
+//  is no longer invisible, because this screen shows exactly what it does before it
+//  happens — the current period ends today, a new one starts today, and every
+//  budget the switch touches is shown and editable in the same place.
 //
-//  DEC-043 made the boundary a genuinely calendar one — the next Monday or the
-//  next 1st, not just "the day after the period you're in ends" — so the copy here
-//  is explicit that the switch may take a few extra days to arrive, and that the
-//  period you're currently looking at simply keeps running until then.
+//  Silent scaling still produces numbers no human chose, and resetting every limit
+//  still throws away the user's setup — DEC-008's other two objections stand, which
+//  is why this screen still exists rather than the switch happening from a plain
+//  cadence toggle.
 //
 //  Two things this screen must communicate, and does:
 //
-//  - **when** the change takes effect, in words, because a switch that appears to
-//    do nothing today looks broken;
+//  - **that it is immediate**, because a switch with no visible effect looks broken
+//    the other way;
 //  - **every budget it affects** — the whole-period figure first, since DEC-043
 //    made that the primary number, then each category — with an editable
 //    suggestion, because the point is that the user chooses these figures rather
@@ -131,9 +132,9 @@ struct CadenceSwitchView: View {
     }
 
     private func switchDescription(_ plan: CadenceSwitchPlan) -> String {
-        let start = shortDate(plan.effectiveFrom)
-        return "Your \(plan.to.title.lowercased()) periods start \(start). "
-            + "The period you're in now keeps running until then — nothing already spent moves."
+        "Switching takes effect immediately: today's period ends today, and your "
+            + "new \(plan.to.title.lowercased()) period starts right now. Anything you've "
+            + "already spent or logged stays exactly where it is."
     }
 
     private static func cadenceDescription(_ cadence: Cadence) -> String {

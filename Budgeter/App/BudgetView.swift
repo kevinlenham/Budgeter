@@ -22,7 +22,6 @@ struct BudgetView: View {
     @State private var period: BudgetPeriod?
     @State private var periodRecord: PeriodRecord?
     @State private var cadence: Cadence?
-    @State private var pendingSchedule: PeriodSchedule?
     @State private var overall: OverallBudgetLine?
     @State private var isEditingOverall = false
     @State private var lines: [BudgetLine] = []
@@ -37,16 +36,6 @@ struct BudgetView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let pendingSchedule {
-                    Section {
-                        Label(
-                            "Switches to \(pendingSchedule.cadence.title) on \(shortDate(pendingSchedule.anchor))",
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
                 if let period {
                     Section {
                         LabeledContent("Period", value: periodTitle(period))
@@ -132,7 +121,6 @@ struct BudgetView: View {
                 lines = snapshot.lines
                 periodRecord = snapshot.period
                 cadence = snapshot.cadence
-                pendingSchedule = snapshot.pendingSchedule
                 overall = snapshot.overall
                 period = snapshot.period?.dates.map {
                     BudgetPeriod(index: 0, startsOn: $0.start, endsOn: $0.end)
@@ -151,9 +139,6 @@ struct BudgetView: View {
 nonisolated struct BudgetSnapshot: Equatable, Sendable {
     var period: PeriodRecord?
     var cadence: Cadence?
-    /// DEC-043: a confirmed switch not yet in effect, shown so the tab itself says
-    /// so rather than leaving the settings screen as the only place to find out.
-    var pendingSchedule: PeriodSchedule?
     var overall: OverallBudgetLine?
     var lines: [BudgetLine] = []
     var unbudgeted: [CategoryRecord] = []
@@ -161,7 +146,6 @@ nonisolated struct BudgetSnapshot: Equatable, Sendable {
     init(today: CivilDate, in db: Database) throws {
         let settings = try BudgetSettingsStore().load(db)
         cadence = settings.schedule?.cadence
-        pendingSchedule = settings.pendingSchedule
 
         let categories = try CategoryStore().all(in: db)
         guard let record = try Queries.period(containing: today, in: db) else {

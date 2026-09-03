@@ -18,8 +18,9 @@
 //     ask.
 //  2. Fortnightly has one genuine ambiguity a calendar cannot resolve on its own:
 //     which of two adjacent Mondays starts "week 1" of the cycle. Onboarding asks
-//     once, mid-cycle. A cadence *switch* never asks, because a switch always
-//     starts a fresh cycle — there is no "already in progress" to describe.
+//     once, mid-cycle. A cadence *switch* never asks, because DEC-043 makes a
+//     switch take effect immediately, today — there is no "already in progress"
+//     to describe, only a fresh cycle starting now.
 //
 
 import Foundation
@@ -38,24 +39,6 @@ nonisolated enum CalendarCadence {
             today.startOfMonth()
         case .fortnightly:
             isSecondWeek ? today.mostRecentMonday().addingDays(-7) : today.mostRecentMonday()
-        }
-    }
-
-    /// The next date on or after `from` that a period of `cadence` may naturally
-    /// start on — the next Monday for weekly and fortnightly, the next 1st for
-    /// monthly. `from` itself, when it already is one.
-    ///
-    /// This is what a cadence switch waits for: DEC-043 chose calendar rigidity
-    /// over an instant switch, so "the next boundary" (DEC-008) now means the next
-    /// *real* one, even when that is a few days further off than the day the
-    /// current period happens to end.
-    static func nextNaturalBoundary(for cadence: Cadence, onOrAfter from: CivilDate) -> CivilDate {
-        switch cadence {
-        case .weekly, .fortnightly:
-            let index = from.weekdayIndex
-            return index == 0 ? from : from.addingDays(7 - index)
-        case .monthly:
-            return from.day == 1 ? from : from.startOfMonth().addingMonths(1, preferringDay: 1)
         }
     }
 }

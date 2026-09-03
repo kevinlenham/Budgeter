@@ -2,8 +2,8 @@
 //  Migration005.swift
 //  Budgeter
 //
-//  DEC-043's two structural additions: a pending cadence switch, and a whole-period
-//  budget that sits alongside the per-category ones rather than replacing them.
+//  DEC-043's whole-period budget — sits alongside the per-category ones rather
+//  than replacing them.
 //
 
 import Foundation
@@ -11,27 +11,8 @@ import Foundation
 nonisolated extension Migrations {
     static let migration005 = Migration(
         version: 5,
-        name: "pending cadence switch and overall limits",
+        name: "overall limits",
         sql: """
-        -- ---------------------------------------------------------------------
-        -- Pending cadence switch (DEC-043)
-        --
-        -- A switch is confirmed immediately but takes effect on a future date —
-        -- the next real Monday or 1st-of-month, per `CalendarCadence`. Storing it
-        -- here rather than overwriting `cadence`/`anchor_on` outright means the
-        -- schedule that governs *today* stays exactly what it already was until
-        -- that date arrives; `PeriodGenerator` promotes pending to active the
-        -- first time it generates on or after it.
-        --
-        -- Both columns null, or both set — the same pairing `anchor_on`/`cadence`
-        -- already enforces, for the same reason: one half means nothing alone.
-        -- ---------------------------------------------------------------------
-        ALTER TABLE budget_settings ADD COLUMN pending_cadence TEXT
-            CHECK (pending_cadence IS NULL OR pending_cadence IN ('weekly', 'fortnightly', 'monthly'));
-        ALTER TABLE budget_settings ADD COLUMN pending_anchor_on TEXT
-            CHECK (pending_anchor_on IS NULL OR
-                   pending_anchor_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]');
-
         -- ---------------------------------------------------------------------
         -- overall_limits (DEC-043)
         --

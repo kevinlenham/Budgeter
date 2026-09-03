@@ -119,38 +119,6 @@ struct BudgetSettingsTests {
         }
     }
 
-    @Test("a pending cadence switch round-trips independently of the active schedule — DEC-043")
-    func pendingScheduleRoundTrips() throws {
-        let database = try Fixture.database()
-        try database.writer.write { db in
-            let store = BudgetSettingsStore()
-            var settings = try store.load(db)
-            settings.schedule = PeriodSchedule(anchor: try date("2026-08-28"), cadence: .fortnightly)
-            settings.pendingSchedule = PeriodSchedule(anchor: try date("2026-10-01"), cadence: .monthly)
-            try store.save(settings, in: db)
-
-            let reloaded = try store.load(db)
-            #expect(reloaded.pendingSchedule?.cadence == .monthly)
-            #expect(reloaded.pendingSchedule?.anchor.iso == "2026-10-01")
-            // Untouched by the pending switch, exactly as the active schedule is
-            // untouched by it until `PeriodGenerator` promotes it.
-            #expect(reloaded.schedule?.cadence == .fortnightly)
-        }
-    }
-
-    @Test("a pending anchor without a pending cadence is meaningless, and the database says so")
-    func pendingAnchorAndCadenceTravelTogether() throws {
-        let database = try Fixture.database()
-        try database.writer.write { db in
-            #expect(throws: DatabaseError.self) {
-                try db.execute(sql: "UPDATE budget_settings SET pending_anchor_on = '2026-10-01' WHERE id = 1")
-            }
-            #expect(throws: DatabaseError.self) {
-                try db.execute(sql: "UPDATE budget_settings SET pending_cadence = 'monthly' WHERE id = 1")
-            }
-        }
-    }
-
     @Test("only the three cadences are accepted")
     func cadenceIsConstrained() throws {
         let database = try Fixture.database()
