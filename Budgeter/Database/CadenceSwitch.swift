@@ -44,7 +44,9 @@ nonisolated struct CadenceSwitchLine: Equatable, Sendable, Identifiable {
     /// screen shows an empty field and the user types a figure themselves.
     var suggestedLimit: Money?
 
-    var id: UUID { categoryID }
+    var id: UUID {
+        categoryID
+    }
 }
 
 /// A proposed switch, with everything the confirmation screen needs and nothing

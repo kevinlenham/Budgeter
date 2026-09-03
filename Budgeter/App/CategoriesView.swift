@@ -79,7 +79,11 @@ struct CategoriesView: View {
         }
         .alert("Rename category", isPresented: .init(
             get: { renaming != nil },
-            set: { if !$0 { renaming = nil } }
+            set: { isPresented in
+                if !isPresented {
+                    renaming = nil
+                }
+            }
         )) {
             TextField("Name", text: $nameField)
             Button("Cancel", role: .cancel) {}

@@ -105,7 +105,7 @@ nonisolated struct PayReminderService: Sendable {
         let tomorrow = CivilDate.today(calendar: calendar, now: now()).addingDays(1)
         let extra = time.date(on: tomorrow, calendar: calendar)
 
-        let dates = ([extra].compactMap { $0 } + instants(for: schedule, at: time))
+        let dates = ([extra].compactMap(\.self) + instants(for: schedule, at: time))
             .sorted()
         try await scheduler.replaceQueue(with: Array(dates.prefix(PayReminderQueue.maximumPending)))
     }

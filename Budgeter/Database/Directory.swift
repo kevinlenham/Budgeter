@@ -170,6 +170,8 @@ nonisolated struct CategoryStore: Sendable {
             """,
             arguments: [name, id?.uuidString]
         )
-        if taken == true { throw DirectoryError.duplicateName(name) }
+        if taken == true {
+            throw DirectoryError.duplicateName(name)
+        }
     }
 }
