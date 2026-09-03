@@ -2,13 +2,18 @@
 //  CadenceSwitchTests.swift
 //  BudgeterTests
 //
-//  DEC-008's switch, which is really a test of DEC-007's governing principle:
-//  *periods are immutable, append-only records, and cadence or anchor changes are
-//  effective-dated forward and never regenerate history.*
+//  DEC-008's switch, now under DEC-043's calendar-anchored periods.
 //
-//  The failure this guards against is the quiet one. A switch that took effect
-//  immediately would truncate the period the user is in, and "spent this period"
-//  would jump for reasons nothing on screen explains.
+//  The failure this guards against is the quiet one, twice over. A switch that
+//  took effect immediately would truncate the period the user is in, and "spent
+//  this period" would jump for reasons nothing on screen explains — DEC-008's
+//  original concern. DEC-043 adds a second one: waiting for a genuine calendar
+//  boundary (the next Monday, the next 1st) instead of "the day after the current
+//  period ends" can leave a multi-day gap, and naively filling that gap under the
+//  old cadence is exactly the overlap bug a live switch already hit once
+//  (`PeriodGeneratorTests` / the commit that fixed it). These tests pin down the
+//  fix that replaced it: the current period is extended to the boundary, and the
+//  old schedule is never asked to generate anything once a switch is pending.
 //
 
 import Foundation
@@ -23,7 +28,7 @@ struct CadenceSwitchTests {
     }
 
     /// Onboarded fortnightly on 2026-09-11, so the period in progress on the 2nd
-    /// runs 2026-08-28 to 2026-09-10.
+    /// runs 2026-08-28 (Friday) to 2026-09-10 (Thursday).
     @discardableResult
     private func configured(_ db: Database) throws -> (account: UUID, groceries: UUID) {
         let account = try Fixture.onboard(db)
@@ -39,8 +44,10 @@ struct CadenceSwitchTests {
         return (account, groceries)
     }
 
-    @Test("the plan takes effect at the next boundary, not today")
-    func planStartsAtTheNextBoundary() throws {
+    // MARK: - Planning
+
+    @Test("the plan waits for the next real calendar boundary, not the day after the current period")
+    func planWaitsForTheRealBoundary() throws {
         let database = try Fixture.database()
         try database.writer.write { db in
             try configured(db)
@@ -48,9 +55,31 @@ struct CadenceSwitchTests {
 
             #expect(plan.from == .fortnightly)
             #expect(plan.to == .monthly)
-            // The day after the period in progress ends. DEC-008: "waiting for the
-            // boundary means partial periods never exist."
-            #expect(plan.effectiveFrom == (try date("2026-09-11")))
+            // Not 2026-09-11 (the day after the current period ends) — 2026-09-11
+            // is a Friday, and DEC-043 waits for the next real 1st-of-month, which
+            // is 2026-10-01.
+            #expect(plan.effectiveFrom == (try date("2026-10-01")))
+        }
+    }
+
+    @Test("switching to weekly waits for the next Monday")
+    func planForWeeklyWaitsForMonday() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            let plan = try CadenceSwitch().plan(to: .weekly, asOf: try date("2026-09-02"), in: db)
+            // 2026-09-11 is a Friday; the next Monday is 2026-09-14.
+            #expect(plan.effectiveFrom == (try date("2026-09-14")))
+        }
+    }
+
+    @Test("switching to fortnightly also waits for the next Monday — a switch always starts week one")
+    func planForFortnightlyWaitsForMonday() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            let plan = try CadenceSwitch().plan(to: .fortnightly, asOf: try date("2026-09-02"), in: db)
+            #expect(plan.effectiveFrom == (try date("2026-09-14")))
         }
     }
 
@@ -89,8 +118,27 @@ struct CadenceSwitchTests {
         }
     }
 
-    @Test("applying it leaves the period in progress exactly as it was")
-    func currentPeriodIsUntouched() throws {
+    @Test("the overall budget is offered and scaled the same way a category is")
+    func overallBudgetIsOffered() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            try OverallLimits().setLimit(
+                amount: Money(minorUnits: 40000, currency: .aud),
+                effectiveFrom: try date("2026-08-28"),
+                in: db
+            )
+
+            let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
+            #expect(plan.overallCurrent == Money(minorUnits: 40000, currency: .aud))
+            #expect(plan.overallSuggested == Money(minorUnits: 87000, currency: .aud))
+        }
+    }
+
+    // MARK: - Applying
+
+    @Test("applying extends the current period to the boundary and leaves everything else about it alone")
+    func currentPeriodIsExtendedNotTruncated() throws {
         let database = try Fixture.database()
         try database.writer.write { db in
             let (account, groceries) = try configured(db)
@@ -115,7 +163,8 @@ struct CadenceSwitchTests {
 
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: today, in: db)
             try CadenceSwitch().apply(
-                plan, limits: [groceries: Money(minorUnits: 43500, currency: .aud)], in: db
+                plan, overallLimit: nil,
+                limits: [groceries: Money(minorUnits: 43500, currency: .aud)], in: db
             )
 
             let period = try #require(try Queries.period(containing: today, in: db))
@@ -124,54 +173,70 @@ struct CadenceSwitchTests {
                     .first { $0.categoryId == groceries.uuidString }
             )
 
-            // Same period, same dates, same limit, same spending. Nothing the user
-            // is looking at today moves.
+            // The start is untouched (DEC-008), and the end reaches exactly the
+            // day before the new schedule's real boundary — not the old cadence's
+            // own natural end, and not a short bridging period either.
             #expect(period.startsOn == "2026-08-28")
-            #expect(period.endsOn == "2026-09-10")
+            #expect(period.endsOn == "2026-09-30")
+            // Nothing already spent or budgeted moves because of the extension.
             #expect(after == before)
         }
     }
 
-    @Test("the next period generated is on the new cadence and starts where the plan said")
-    func nextPeriodUsesTheNewCadence() throws {
+    @Test("nothing generates while the switch is still pending, however far into the gap you look")
+    func nothingGeneratesDuringTheGap() throws {
         let database = try Fixture.database()
         try database.writer.write { db in
             try configured(db)
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
-            try CadenceSwitch().apply(plan, limits: [:], in: db)
+            try CadenceSwitch().apply(plan, overallLimit: nil, limits: [:], in: db)
 
-            // Nothing new until the boundary arrives.
-            #expect(try PeriodGenerator().generate(through: try date("2026-09-10"), in: db).isEmpty)
+            // Every day of the gap, right up to the boundary itself.
+            for iso in ["2026-09-11", "2026-09-20", "2026-09-29", "2026-09-30"] {
+                #expect(try PeriodGenerator().generate(through: try date(iso), in: db).isEmpty)
+            }
 
-            let generated = try PeriodGenerator().generate(through: try date("2026-09-11"), in: db)
-            #expect(generated.count == 1)
-            #expect(generated.first?.startsOn == (try date("2026-09-11")))
-            // Monthly, so it ends the day before the 11th of next month.
-            #expect(generated.first?.endsOn == (try date("2026-10-10")))
+            // Exactly one stored period the whole time: the extended one.
+            let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM periods WHERE deleted_at IS NULL")
+            #expect(count == 1)
         }
     }
 
-    @Test("resuming generation after a switch never produces an overlapping period")
-    func generationAfterSwitchNeverOverlaps() throws {
-        // Regression test. `firstMissingIndex` used to reinterpret the *old*
-        // period's start date under the *new* schedule's anchor arithmetic —
-        // sound only when the schedule never changes. Fortnightly (anchored
-        // 2026-09-11) switched to weekly is a combination where that produced
-        // index -1 instead of 0, generating 2026-09-04...2026-09-10, which
-        // overlaps the already-stored 2026-08-28...2026-09-10 and trips
-        // `trg_periods_no_overlap` — the exact failure a live switch hit.
+    @Test("reaching the boundary promotes the pending schedule and generates cleanly")
+    func reachingTheBoundaryPromotes() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
+            try CadenceSwitch().apply(plan, overallLimit: nil, limits: [:], in: db)
+
+            let generated = try PeriodGenerator().generate(through: try date("2026-10-01"), in: db)
+            #expect(generated.count == 1)
+            #expect(generated.first?.startsOn == (try date("2026-10-01")))
+            #expect(generated.first?.endsOn == (try date("2026-10-31")))
+
+            let settings = try BudgetSettingsStore().load(db)
+            #expect(settings.schedule?.cadence == .monthly)
+            #expect(settings.schedule?.anchor == (try date("2026-10-01")))
+            #expect(settings.pendingSchedule == nil)
+        }
+    }
+
+    @Test("a backlog spanning the boundary fills in on the new schedule alone, with no overlap")
+    func backlogAcrossTheBoundaryDoesNotOverlap() throws {
+        // Regression test for the failure a live cadence switch hit: generating
+        // well past a pending boundary in one call must never produce a period
+        // that overlaps the (possibly extended) one already stored.
         let database = try Fixture.database()
         try database.writer.write { db in
             try configured(db)
             let plan = try CadenceSwitch().plan(to: .weekly, asOf: try date("2026-09-02"), in: db)
-            try CadenceSwitch().apply(plan, limits: [:], in: db)
+            try CadenceSwitch().apply(plan, overallLimit: nil, limits: [:], in: db)
 
-            // Generating well past the new boundary must not throw.
-            let generated = try PeriodGenerator().generate(through: try date("2026-09-15"), in: db)
+            let generated = try PeriodGenerator().generate(through: try date("2026-10-05"), in: db)
             #expect(!generated.isEmpty)
             #expect(generated.allSatisfy { $0.startsOn >= plan.effectiveFrom })
 
-            // Belt and braces: read every stored period back and check none overlap.
             let rows = try Row.fetchAll(db, sql: """
             SELECT starts_on, ends_on FROM periods WHERE deleted_at IS NULL ORDER BY starts_on
             """)
@@ -190,7 +255,8 @@ struct CadenceSwitchTests {
             let (_, groceries) = try configured(db)
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
             try CadenceSwitch().apply(
-                plan, limits: [groceries: Money(minorUnits: 43500, currency: .aud)], in: db
+                plan, overallLimit: nil,
+                limits: [groceries: Money(minorUnits: 43500, currency: .aud)], in: db
             )
 
             let limits = CategoryLimits()
@@ -201,7 +267,7 @@ struct CadenceSwitchTests {
                     == Money(minorUnits: 20000, currency: .aud)
             )
             #expect(
-                try limits.limit(categoryID: groceries, on: try date("2026-09-11"), in: db)
+                try limits.limit(categoryID: groceries, on: try date("2026-10-01"), in: db)
                     == Money(minorUnits: 43500, currency: .aud)
             )
         }
@@ -215,12 +281,47 @@ struct CadenceSwitchTests {
             let before = try BudgetSettingsStore().load(db).paySchedule
 
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
-            try CadenceSwitch().apply(plan, limits: [:], in: db)
+            try CadenceSwitch().apply(plan, overallLimit: nil, limits: [:], in: db)
 
             // DEC-036: "a user switching from fortnightly to monthly budgeting has
-            // not changed jobs."
+            // not changed jobs." The active schedule doesn't even change yet
+            // either — only `pendingSchedule` does, until the boundary arrives.
             #expect(try BudgetSettingsStore().load(db).paySchedule == before)
-            #expect(try BudgetSettingsStore().load(db).schedule?.cadence == .monthly)
+            #expect(try BudgetSettingsStore().load(db).schedule?.cadence == .fortnightly)
+            #expect(try BudgetSettingsStore().load(db).pendingSchedule?.cadence == .monthly)
+        }
+    }
+
+    @Test("switching twice before the first takes effect replaces the pending switch, not stacks it")
+    func secondSwitchReplacesThePending() throws {
+        let database = try Fixture.database()
+        try database.writer.write { db in
+            try configured(db)
+            let today = try date("2026-09-02")
+
+            let first = try CadenceSwitch().plan(to: .monthly, asOf: today, in: db)
+            try CadenceSwitch().apply(first, overallLimit: nil, limits: [:], in: db)
+            #expect(first.effectiveFrom == (try date("2026-10-01")))
+
+            // The second plan is computed from wherever the current period now
+            // ends — already extended by the first apply to 2026-09-30 — so its
+            // own boundary floor is 2026-10-01, not the original 2026-09-11.
+            // 2026-10-01 is a Thursday; the next Monday is 2026-10-05.
+            let second = try CadenceSwitch().plan(to: .weekly, asOf: today, in: db)
+            #expect(second.effectiveFrom == (try date("2026-10-05")))
+            try CadenceSwitch().apply(second, overallLimit: nil, limits: [:], in: db)
+
+            let settings = try BudgetSettingsStore().load(db)
+            #expect(settings.pendingSchedule?.cadence == .weekly)
+            #expect(settings.pendingSchedule?.anchor == (try date("2026-10-05")))
+
+            // The current period's end tracks the *latest* plan, not the first.
+            let period = try #require(try Queries.period(containing: today, in: db))
+            #expect(period.endsOn == "2026-10-04")
+
+            // Reaching the (now later) boundary promotes to weekly, not monthly.
+            try PeriodGenerator().generate(through: try date("2026-10-05"), in: db)
+            #expect(try BudgetSettingsStore().load(db).schedule?.cadence == .weekly)
         }
     }
 }

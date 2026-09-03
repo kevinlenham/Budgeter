@@ -21,6 +21,10 @@ nonisolated enum BudgetSettingsError: Error, Equatable {
 nonisolated struct BudgetSettings: Equatable, Sendable {
     /// Anchor and cadence for budget periods. Nil until onboarding.
     var schedule: PeriodSchedule?
+    /// DEC-043: a confirmed cadence switch, not yet in effect. `PeriodGenerator`
+    /// promotes this to `schedule` the first time it generates on or after
+    /// `pendingSchedule.anchor`. Nil when there is nothing pending.
+    var pendingSchedule: PeriodSchedule?
     /// DEC-036's separate pay schedule. Nil until the user confirms it.
     var paySchedule: PeriodSchedule?
     /// When the payday reminder fires, in local wall-clock time (DEC-036).
@@ -39,6 +43,9 @@ nonisolated struct BudgetSettingsStore: Sendable {
         }
         return BudgetSettings(
             schedule: try Self.schedule(anchor: row["anchor_on"], cadence: row["cadence"]),
+            pendingSchedule: try Self.schedule(
+                anchor: row["pending_anchor_on"], cadence: row["pending_cadence"]
+            ),
             paySchedule: try Self.schedule(anchor: row["pay_anchor_on"], cadence: row["pay_cadence"]),
             payReminderTime: try Self.time(row["pay_reminder_time"]),
             payReminderEnabled: row["pay_reminder_enabled"] != 0
@@ -51,6 +58,8 @@ nonisolated struct BudgetSettingsStore: Sendable {
             UPDATE budget_settings
                SET anchor_on            = ?,
                    cadence              = ?,
+                   pending_anchor_on    = ?,
+                   pending_cadence      = ?,
                    pay_anchor_on        = ?,
                    pay_cadence          = ?,
                    pay_reminder_time    = ?,
@@ -62,6 +71,8 @@ nonisolated struct BudgetSettingsStore: Sendable {
             arguments: [
                 settings.schedule?.anchor.iso,
                 settings.schedule?.cadence.rawValue,
+                settings.pendingSchedule?.anchor.iso,
+                settings.pendingSchedule?.cadence.rawValue,
                 settings.paySchedule?.anchor.iso,
                 settings.paySchedule?.cadence.rawValue,
                 settings.payReminderTime?.iso,

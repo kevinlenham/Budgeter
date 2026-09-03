@@ -117,6 +117,8 @@ Sprints are sized by outcome, not by calendar. Estimates assume part-time solo w
 
 **Done when** exporting and re-importing produces an identical dataset with zero duplicate rows — asserted as byte-for-byte identity of a re-export, which DEC-042's id-preserving restore makes possible — and one real payday reminder has fired on your phone and been logged through.
 
+**Mid-sprint addendum.** Using the app surfaced that DEC-007's payday-anchored periods were the wrong model: no visible confirmation when a cadence switch happened, category-only budgeting felt mandatory, and weekly/monthly should just mean Monday–Sunday and the calendar month rather than an arbitrary payday. DEC-043 supersedes DEC-007 — periods are calendar-anchored now, with a whole-period budget alongside the per-category ones, and a cadence switch waits for the next *real* calendar boundary rather than the day after the current period ends.
+
 **Watch for**
 - No local team needed: `UNUserNotificationCenter` is unrelated to APNs and works under free provisioning. DEC-034's "Push Notifications require a paid team" does not apply here.
 - iOS has no repeating trigger for a 14-day cycle, so fortnightly is a queue of one-shots, not a repeat. Cap is 64 pending per app; a year of fortnightly is 26.

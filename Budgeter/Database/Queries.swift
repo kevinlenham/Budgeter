@@ -101,6 +101,47 @@ nonisolated struct BudgetLine: Codable, FetchableRecord, Equatable, Sendable, Id
     }
 }
 
+/// DEC-043's whole-period line — the `BudgetLine` shape, minus a category, for the
+/// figure the Budget tab now leads with.
+nonisolated struct OverallBudgetLine: Codable, FetchableRecord, Equatable, Sendable {
+    var currency: String
+    var limitMinor: Int64
+    var spentMinor: Int64
+    var remainingMinor: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case currency
+        case limitMinor = "limit_minor"
+        case spentMinor = "spent_minor"
+        case remainingMinor = "remaining_minor"
+    }
+
+    private var money: Currency? {
+        Currency(rawValue: currency)
+    }
+
+    var limit: Money? {
+        money.map { Money(minorUnits: limitMinor, currency: $0) }
+    }
+
+    var spent: Money? {
+        money.map { Money(minorUnits: spentMinor, currency: $0) }
+    }
+
+    var remaining: Money? {
+        money.map { Money(minorUnits: remainingMinor, currency: $0) }
+    }
+
+    var fractionSpent: Double {
+        guard limitMinor > 0 else { return spentMinor > 0 ? 1 : 0 }
+        return max(0, min(1, Double(spentMinor) / Double(limitMinor)))
+    }
+
+    var isOverspent: Bool {
+        remainingMinor < 0
+    }
+}
+
 nonisolated enum Queries {
     /// The whole ledger, newest first. `occurred_at` breaks ties within a day, which
     /// is exactly the job DEC-009 gave it.
@@ -137,6 +178,21 @@ nonisolated enum Queries {
               JOIN categories c ON c.id = s.category_id AND c.deleted_at IS NULL
              WHERE s.period_id = ?
              ORDER BY c.name
+            """,
+            arguments: [periodID]
+        )
+    }
+
+    /// The whole-period budget for a period, if one is set — DEC-043. Reads
+    /// `period_overall_status`, which is absent from a period with no overall
+    /// limit, matching how an unbudgeted category is absent from `budgetLines`.
+    static func overallStatus(periodID: String, in db: Database) throws -> OverallBudgetLine? {
+        try OverallBudgetLine.fetchOne(
+            db,
+            sql: """
+            SELECT currency, limit_minor, spent_minor, remaining_minor
+              FROM period_overall_status
+             WHERE period_id = ?
             """,
             arguments: [periodID]
         )

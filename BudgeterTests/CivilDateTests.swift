@@ -126,6 +126,113 @@ struct CivilDateTests {
     }
 }
 
+@Suite("Calendar week and month anchors — DEC-043")
+struct CivilDateCalendarAnchorTests {
+    private func date(_ iso: String) throws -> CivilDate {
+        try #require(CivilDate(iso: iso))
+    }
+
+    @Test("1970-01-01, a known Thursday, has weekday index 3")
+    func weekdayIndexMatchesTheEpoch() throws {
+        // The one external fact this formula rests on: the Unix epoch was a
+        // Thursday. Monday-indexed, that is 3.
+        #expect(try date("1970-01-01").weekdayIndex == 3)
+    }
+
+    @Test("a full week of weekday indices runs 0 through 6, Monday first")
+    func weekdayIndexCyclesThroughAWeek() throws {
+        let monday = try date("2026-09-14")
+        let indices = (0 ..< 7).map { monday.addingDays($0).weekdayIndex }
+        #expect(indices == [0, 1, 2, 3, 4, 5, 6])
+    }
+
+    @Test("a Monday's most recent Monday is itself")
+    func mondayIsItsOwnMonday() throws {
+        let monday = try date("2026-09-14")
+        #expect(monday.mostRecentMonday() == monday)
+    }
+
+    @Test("every other day of the week resolves to the same Monday")
+    func mostRecentMondayIsStableAcrossTheWeek() throws {
+        let monday = try date("2026-09-14")
+        for offset in 1 ... 6 {
+            #expect(monday.addingDays(offset).mostRecentMonday() == monday)
+        }
+    }
+
+    @Test("start of month is the 1st, whatever day it is asked from")
+    func startOfMonth() throws {
+        #expect(try date("2026-09-01").startOfMonth() == (try date("2026-09-01")))
+        #expect(try date("2026-09-15").startOfMonth() == (try date("2026-09-01")))
+        #expect(try date("2026-09-30").startOfMonth() == (try date("2026-09-01")))
+    }
+}
+
+@Suite("CalendarCadence — DEC-043")
+struct CalendarCadenceTests {
+    private func date(_ iso: String) throws -> CivilDate {
+        try #require(CivilDate(iso: iso))
+    }
+
+    @Test("weekly needs no user input: any Monday produces Monday–Sunday forever")
+    func weeklyAnchorIsAlwaysAMonday() throws {
+        let today = try date("2026-09-16") // a Wednesday
+        let anchor = CalendarCadence.anchor(for: .weekly, today: today, isSecondWeek: false)
+        #expect(anchor == (try date("2026-09-14")))
+        #expect(anchor.weekdayIndex == 0)
+    }
+
+    @Test("monthly needs no user input: it is always the 1st of the current month")
+    func monthlyAnchorIsAlwaysTheFirst() throws {
+        let today = try date("2026-09-16")
+        let anchor = CalendarCadence.anchor(for: .monthly, today: today, isSecondWeek: false)
+        #expect(anchor == (try date("2026-09-01")))
+    }
+
+    @Test("fortnightly's phase choice picks this Monday or last Monday")
+    func fortnightlyAnchorUsesThePhaseChoice() throws {
+        let today = try date("2026-09-16") // a Wednesday, in the week of 2026-09-14
+        let weekOne = CalendarCadence.anchor(for: .fortnightly, today: today, isSecondWeek: false)
+        let weekTwo = CalendarCadence.anchor(for: .fortnightly, today: today, isSecondWeek: true)
+        #expect(weekOne == (try date("2026-09-14")))
+        #expect(weekTwo == (try date("2026-09-07")))
+        #expect(weekOne.days(until: weekTwo) == -7)
+    }
+
+    @Test("the next natural boundary for weekly and fortnightly is the next Monday")
+    func nextNaturalBoundaryForWeekly() throws {
+        // 2026-09-11 is a Friday.
+        let boundary = CalendarCadence.nextNaturalBoundary(for: .weekly, onOrAfter: try date("2026-09-11"))
+        #expect(boundary == (try date("2026-09-14")))
+    }
+
+    @Test("a date that already is a Monday is its own boundary")
+    func nextNaturalBoundaryIsIdempotentOnAMonday() throws {
+        let monday = try date("2026-09-14")
+        #expect(CalendarCadence.nextNaturalBoundary(for: .weekly, onOrAfter: monday) == monday)
+        #expect(CalendarCadence.nextNaturalBoundary(for: .fortnightly, onOrAfter: monday) == monday)
+    }
+
+    @Test("the next natural boundary for monthly is the next 1st")
+    func nextNaturalBoundaryForMonthly() throws {
+        // 2026-09-11 is not the 1st, so the boundary is 2026-10-01.
+        let boundary = CalendarCadence.nextNaturalBoundary(for: .monthly, onOrAfter: try date("2026-09-11"))
+        #expect(boundary == (try date("2026-10-01")))
+    }
+
+    @Test("the 1st is its own monthly boundary")
+    func nextNaturalBoundaryIsIdempotentOnTheFirst() throws {
+        let firstOfMonth = try date("2026-10-01")
+        #expect(CalendarCadence.nextNaturalBoundary(for: .monthly, onOrAfter: firstOfMonth) == firstOfMonth)
+    }
+
+    @Test("the monthly boundary crosses a year, at December")
+    func nextNaturalBoundaryCrossesAYear() throws {
+        let boundary = CalendarCadence.nextNaturalBoundary(for: .monthly, onOrAfter: try date("2026-12-15"))
+        #expect(boundary == (try date("2027-01-01")))
+    }
+}
+
 @Suite("Integer helpers")
 struct IntegerHelperTests {
     @Test("modulo is never negative, unlike %")

@@ -17,7 +17,7 @@ nonisolated struct Migration: Sendable {
 }
 
 nonisolated enum Migrations {
-    static let all: [Migration] = [migration001, migration002, migration003, migration004]
+    static let all: [Migration] = [migration001, migration002, migration003, migration004, migration005]
 
     /// The schema core. Every invariant that can be expressed structurally is
     /// expressed here rather than in Swift, so no write path can bypass it.

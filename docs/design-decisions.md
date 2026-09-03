@@ -961,6 +961,42 @@ Rule 3 is not weakened, because rule 3 is about *ingestion* — observations of 
 
 ---
 
+## DEC-043 — Budget periods are calendar-anchored, not payday-anchored
+
+**Context** — DEC-007 anchored budget periods to the user's actual payday, reasoning that "the entire reason fortnightly cadence exists in Australia is fortnightly pay, so the anchor is a real-world fact the user knows." Using the app in Sprint 4 surfaced three complaints at once: switching cadence gave no visible confirmation anywhere except the settings screen itself; per-category budgeting felt mandatory when a single overall figure was what was actually wanted, day to day; and the payday-anchor model doesn't match how the user actually thinks about a week, a fortnight or a month — weekly should mean Monday to Sunday, monthly should mean the calendar month, and only fortnightly has a genuine ambiguity (which of two Mondays starts the cycle) worth asking about.
+
+This is the DEC-032/033 pattern: implementation revealed a recorded decision was wrong for this app, in daily use, and it goes back into this document as a superseding DEC rather than being quietly worked around.
+
+**Options considered**
+- Keep payday-anchoring, add better visibility for a cadence switch and an overall-budget figure as separate, unrelated fixes
+- Full calendar-anchoring: weekly is Monday–Sunday, monthly is the calendar month, fortnightly picks its phase once
+- Let the user choose between payday-anchored and calendar-anchored periods
+
+**Choice** — Full calendar-anchoring, plus an overall whole-period budget that sits alongside (not instead of) per-category ones, plus visible confirmation of a pending switch on the Budget tab itself.
+
+**Reasoning**
+
+*Why calendar-anchoring is a smaller change than it looks.* DEC-036 already keeps the payday reminder's schedule (`pay_anchor_on`/`pay_cadence`) completely separate from the budget period's schedule (`anchor_on`/`cadence`) — "pay rhythm and budget rhythm are the same thing by default and not by definition." Decoupling the budget period from payday is therefore not a schema fight; it is deleting the one place onboarding copied one into the other. The reminder still asks for a real payday, later, in Settings — never at first launch, following DEC-024's consent precedent, and never bundled with a budgeting question it has nothing to do with.
+
+*Why weekly and monthly need no user input at all.* Any Monday produces Monday–Sunday periods forever in both directions, because 7 divides every week; any 1st-of-a-month produces full calendar months forever, because day 1 never needs DEC-007's clamping rule. There is nothing to ask. Fortnightly is the one exception: nothing on a calendar says which of two adjacent Mondays is "week 1" of a cycle already in progress, and only the user knows their own habit or pay rhythm. Onboarding asks once; a cadence *switch* to fortnightly never asks, because a switch always starts a fresh cycle rather than describing one already under way.
+
+*Why a switch waits for the real boundary, not the day after the current period.* DEC-008 already rejected switching immediately, because it would truncate the period the user is in and make "spent this period" jump for invisible reasons. Under calendar-anchoring, "the next boundary" now genuinely means the next Monday or the next 1st — which can fall a few days after the day the current period would otherwise have ended. The alternative, an instant switch that isn't calendar-aligned, would produce a weekly period that doesn't start on a Monday, defeating the entire point of asking for Monday–Sunday in the first place.
+
+*Why the gap is bridged by extending the current period, not by inventing a short one.* DEC-008's "partial periods never exist" was written to stop the period the user is *already partway through* being cut short. A multi-day gap between the old cadence's natural end and the new cadence's real boundary needs *something* to own those days, and a brand-new, short, one-off period under the old cadence is the same mistake from the other direction — a period nobody chose the length of. Extending the currently-open period's `ends_on` to reach the boundary has direct precedent already in this codebase: `PeriodGenerator.resnapshot` already revises the current period's limits while leaving every past period untouched, on the same principle — the period in progress is a decision still being made, not history yet.
+
+*Why the old schedule must go completely silent once a switch is pending.* The extension is not aligned to the old cadence — a 14-day fortnight extended by 20 days to reach a monthly boundary has no relationship to any fortnightly index. Building `PeriodGenerator` was where this got proven the hard way a second time: the very first version of the promotion logic tried to let the old schedule keep generating up to the boundary "just in case", and produced exactly the overlapping-period crash a cadence switch had already hit once in the field, for the same underlying reason DEC-042's fix targeted — an index computed under one schedule reinterpreted as if it meant something under another. The fix is not a smarter computation; it is refusing to ask the old schedule anything at all while a switch is pending. The extension already did the only work that needed doing.
+
+*Why an overall budget, not a replacement for category budgets.* "I don't really like that everything is separated" was the actual complaint — category-only budgeting made a single, simple constraint ("don't spend more than $2,000 this fortnight") require setting up several category limits that summed to roughly the right number. The overall figure is optional, exactly as a category limit already was, and is snapshotted the same way (`period_overall_status`, effective-dated via `overall_limits`) so DEC-008's "a past period shows the limit that applied then" holds for it identically. Category budgets remain available for anyone who wants the finer detail, on top of the overall number rather than instead of it.
+
+**Consequences**
+- `budget_settings` gains `pending_cadence`/`pending_anchor_on`. A confirmed switch is recorded there and promoted to the active `anchor_on`/`cadence` by `PeriodGenerator` the first time it generates on or after the pending anchor — never by `CadenceSwitch.apply` itself.
+- `overall_limits` (effective-dated, one open row at a time, enforced by a partial unique index on a constant expression rather than a column) and `periods.overall_limit_minor`/`overall_limit_currency` (the snapshot, inline on the period row since there is at most one figure — no second table sized for many rows is needed the way `period_limits` needs one).
+- Onboarding drops the "next payday" date picker for the budget schedule entirely. It keeps one question — fortnightly's phase — and nothing else.
+- The Budget tab now leads with the overall figure and names the active cadence in its own title, and shows a pending-switch banner when one is outstanding — the visibility gap that started this whole conversation.
+- Every existing period-schedule mechanism (`PeriodSchedule`, `index(containing:)`, lazy generation, negative indices before an anchor) is untouched. DEC-043 changes what an anchor *means* and where it comes from, not the arithmetic that turns an anchor and a cadence into dates.
+
+---
+
 # Open items
 
 | Item | Status | Resolution path |

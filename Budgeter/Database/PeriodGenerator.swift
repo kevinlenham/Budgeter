@@ -8,8 +8,9 @@
 //  alternative was eager background generation via `BGTaskScheduler`, which iOS runs
 //  when it chooses and is a well-known source of "why didn't this fire".
 //
-//  All of the arithmetic lives in `PeriodSchedule`, which knows nothing about
-//  SQLite. This type only decides *which* indices are missing and writes them.
+//  All of the arithmetic lives in `PeriodSchedule` and `CalendarCadence`, which know
+//  nothing about SQLite. This type only decides *which* indices are missing and
+//  writes them — and, since DEC-043, whether a pending cadence switch has arrived.
 //
 
 import Foundation
@@ -29,19 +30,39 @@ nonisolated struct PeriodGenerator: Sendable {
     /// independently.
     @discardableResult
     func generate(through today: CivilDate, in db: Database) throws -> [BudgetPeriod] {
-        guard let schedule = try settingsStore.load(db).schedule else {
+        var settings = try settingsStore.load(db)
+        guard let schedule = settings.schedule else {
             throw BudgetSettingsError.notConfigured
         }
 
-        let firstIndex = try firstMissingIndex(for: schedule, today: today, in: db)
-        let periods = schedule.periods(fromIndex: firstIndex, through: today)
-        for period in periods {
-            try insert(period, schedule: schedule, in: db)
+        // DEC-043: a switch is confirmed the moment the user chooses it, but the
+        // schedule it produces only takes over once its anchor actually arrives.
+        if let pending = settings.pendingSchedule {
+            guard pending.anchor <= today else {
+                // Still waiting. `CadenceSwitch.apply` already extended the
+                // currently-stored period's `ends_on` to reach the day before
+                // `pending.anchor`, so there is nothing left to fill in — and the
+                // *old* schedule must not be asked to try. Its own natural next
+                // period is computed from its own cadence, which the extension was
+                // never aligned to, so a naive attempt can propose a period that
+                // overlaps the one just extended. Doing nothing here is not a
+                // shortcut; it is the only correct answer until the boundary
+                // arrives.
+                return []
+            }
+
+            settings.schedule = pending
+            settings.pendingSchedule = nil
+            try settingsStore.save(settings, in: db)
+
+            return try generate(using: pending, through: today, in: db)
         }
-        return periods
+
+        return try generate(using: schedule, through: today, in: db)
     }
 
-    /// Rebuilds a period's limit snapshot from the limits currently in force.
+    /// Rebuilds a period's limit snapshot from the limits currently in force —
+    /// both the per-category ones and DEC-043's overall figure.
     ///
     /// Only ever for the period in progress. DEC-008's rule is that a *past* period
     /// keeps the limit that applied then — not that a user who sets their grocery
@@ -54,10 +75,22 @@ nonisolated struct PeriodGenerator: Sendable {
         else { throw BudgetSettingsError.malformedStoredValue(period.startsOn) }
 
         try db.execute(sql: "DELETE FROM period_limits WHERE period_id = ?", arguments: [period.id])
-        try snapshotLimits(periodID: id, startsOn: startsOn, in: db)
+        try snapshotCategoryLimits(periodID: id, startsOn: startsOn, in: db)
+        try snapshotOverallLimit(periodID: id, startsOn: startsOn, in: db)
     }
 
     // MARK: - Private
+
+    private func generate(
+        using schedule: PeriodSchedule, through today: CivilDate, in db: Database
+    ) throws -> [BudgetPeriod] {
+        let firstIndex = try firstMissingIndex(for: schedule, today: today, in: db)
+        let periods = schedule.periods(fromIndex: firstIndex, through: today)
+        for period in periods {
+            try insert(period, schedule: schedule, in: db)
+        }
+        return periods
+    }
 
     /// Where to resume.
     ///
@@ -74,9 +107,10 @@ nonisolated struct PeriodGenerator: Sendable {
     /// anchor has no relationship to a period stored under the old one — indexing
     /// the old start under the new schedule can land on an index whose period
     /// overlaps the row already on disk, which the `trg_periods_no_overlap` trigger
-    /// then rejects. The boundary date is schedule-agnostic: `CadenceSwitch.plan`
-    /// already computes the switch's `effectiveFrom` as this same day, precisely so
-    /// the new schedule's first period starts there and nowhere else.
+    /// then rejects. The boundary date is schedule-agnostic: DEC-043's pending
+    /// switch always extends the last old period to end the day before the new
+    /// schedule's anchor, precisely so the new schedule's first period starts
+    /// there and nowhere else.
     private func firstMissingIndex(for schedule: PeriodSchedule, today: CivilDate, in db: Database) throws -> Int {
         let latest = try String.fetchOne(db, sql: """
         SELECT ends_on
@@ -115,7 +149,8 @@ nonisolated struct PeriodGenerator: Sendable {
                 try AppDatabase.nextChangeSeq(db),
             ]
         )
-        try snapshotLimits(periodID: id, startsOn: period.startsOn, in: db)
+        try snapshotCategoryLimits(periodID: id, startsOn: period.startsOn, in: db)
+        try snapshotOverallLimit(periodID: id, startsOn: period.startsOn, in: db)
     }
 
     /// DEC-008: each period snapshots the limits in force at its start, so a past
@@ -124,7 +159,7 @@ nonisolated struct PeriodGenerator: Sendable {
     ///
     /// One row per limit, each with its own id and change_seq, so the snapshot is
     /// ordinary data a future sync can carry rather than a special case.
-    private func snapshotLimits(periodID: UUID, startsOn: CivilDate, in db: Database) throws {
+    private func snapshotCategoryLimits(periodID: UUID, startsOn: CivilDate, in db: Database) throws {
         let inForce = try Row.fetchAll(
             db,
             sql: """
@@ -158,5 +193,19 @@ nonisolated struct PeriodGenerator: Sendable {
                 ]
             )
         }
+    }
+
+    /// DEC-043's whole-period snapshot: at most one figure, so it is written
+    /// directly onto the period row rather than into a table sized for many.
+    /// Left `NULL` when there is nothing in force, matching how an unbudgeted
+    /// category simply has no row in `period_limits`.
+    private func snapshotOverallLimit(periodID: UUID, startsOn: CivilDate, in db: Database) throws {
+        let limit = try OverallLimits().limit(on: startsOn, in: db)
+        try db.execute(
+            sql: """
+            UPDATE periods SET overall_limit_minor = ?, overall_limit_currency = ? WHERE id = ?
+            """,
+            arguments: [limit?.minorUnits, limit?.currency.rawValue, periodID.uuidString]
+        )
     }
 }

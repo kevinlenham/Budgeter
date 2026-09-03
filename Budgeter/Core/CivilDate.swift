@@ -105,6 +105,26 @@ nonisolated struct CivilDate: Equatable, Hashable, Comparable, Sendable {
         days(until: other) + 1
     }
 
+    /// Days since the most recent Monday: 0 for Monday, ... 6 for Sunday.
+    ///
+    /// 1970-01-01 (serial day 0) was a Thursday — a fact fixed by the calendar, not
+    /// a coincidence of this codebase — so `(serialDay + 3).modulo(7)` gives 3 for
+    /// it, which is where Thursday sits when Monday is counted as 0.
+    var weekdayIndex: Int {
+        (serialDay + 3).modulo(7)
+    }
+
+    /// The Monday of the calendar week this date falls in. Today included: a
+    /// Monday's own `mostRecentMonday()` is itself.
+    func mostRecentMonday() -> CivilDate {
+        addingDays(-weekdayIndex)
+    }
+
+    /// The first day of the calendar month this date falls in.
+    func startOfMonth() -> CivilDate {
+        CivilDate(year: year, month: month, clampedDay: 1)
+    }
+
     /// Months are not a fixed number of days, so month arithmetic is done on the
     /// month number and the day is clamped afterwards.
     ///

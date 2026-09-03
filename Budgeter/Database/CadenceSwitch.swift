@@ -6,18 +6,21 @@
 //  show every category with a scaled-and-rounded suggested limit the user can
 //  edit."
 //
-//  Both halves matter, and they are separated here into `plan` and `apply` so the
-//  screen physically cannot do the second without showing the first. Nothing is
-//  written until the user confirms.
+//  DEC-043 changed what "the next boundary" means. Budget periods are calendar-
+//  anchored now — weekly is Monday–Sunday, monthly is the calendar month — so the
+//  boundary a switch waits for is the next *real* one (`CalendarCadence`), which
+//  can fall a few days after the day the current period would otherwise have
+//  ended. Rather than invent a short bridging period to cover that gap — exactly
+//  what DEC-008 already refused to do — the currently-open period's `ends_on` is
+//  extended to reach it. That is not the same move as truncating a period, which
+//  DEC-008 rejected for cutting the period the user is *already partway through*
+//  short; extending the period still in progress has precedent in this codebase
+//  already, in `PeriodGenerator.resnapshot`, which revises the current period's
+//  limits while leaving every past one untouched.
 //
-//  The mechanism is DEC-007's governing principle rather than a special case:
-//  *periods are immutable, append-only records, and cadence or anchor changes are
-//  effective-dated forward and never regenerate history.* A switch is therefore not
-//  a migration of anything — it is a new `(anchor, cadence)` whose anchor is the
-//  next boundary. Every period already stored keeps the cadence and anchor recorded
-//  on its own row, `PeriodGenerator` resumes at the first index the new schedule has
-//  not covered, and nothing in the past moves. Partial periods never exist, so
-//  "spent this period" never jumps for invisible reasons.
+//  Both halves — `plan` and `apply` — stay separated so the screen physically
+//  cannot commit without showing consequences first. Nothing is written until the
+//  user confirms.
 //
 
 import Foundation
@@ -56,7 +59,14 @@ nonisolated struct CadenceSwitchPlan: Equatable, Sendable {
     var to: Cadence
     /// The first day of the first period on the new cadence — DEC-008's "your new
     /// cadence starts 14 March", and the date every new limit takes effect from.
+    /// DEC-043: the next *real* calendar boundary for `to`, not simply the day
+    /// after the current period ends.
     var effectiveFrom: CivilDate
+    /// The period containing `asOf`, whose `ends_on` `apply` extends to
+    /// `effectiveFrom.addingDays(-1)` if there is a gap to bridge.
+    var currentPeriodID: UUID
+    var overallCurrent: Money?
+    var overallSuggested: Money?
     var lines: [CadenceSwitchLine]
 }
 
@@ -70,20 +80,26 @@ nonisolated struct CadenceSwitch: Sendable {
             throw CadenceSwitchError.notConfigured
         }
         guard let current = try Queries.period(containing: today, in: db),
-              let dates = current.dates
+              let dates = current.dates,
+              let periodID = UUID(uuidString: current.id)
         else {
             throw CadenceSwitchError.noCurrentPeriod
         }
 
-        // The day after the period the user is in ends. Taken from the stored row
-        // rather than recomputed from the schedule, so the boundary the switch
-        // hangs off is the same one the budget screen is already showing.
-        let effectiveFrom = dates.end.addingDays(1)
+        // DEC-043: the next date `cadence` may naturally start on, no earlier than
+        // the day after the current period ends. A switch to fortnightly never
+        // asks which week of the cycle it lands in — it always starts a fresh
+        // "week 1", so there is no phase question here the way onboarding has one.
+        let effectiveFrom = CalendarCadence.nextNaturalBoundary(
+            for: cadence, onOrAfter: dates.end.addingDays(1)
+        )
 
-        let limits = CategoryLimits(now: now, makeID: makeID)
+        let overallCurrent = try OverallLimits().limit(on: today, in: db)
+
+        let categoryLimits = CategoryLimits(now: now, makeID: makeID)
         let lines = try CategoryStore().all(in: db).compactMap { category -> CadenceSwitchLine? in
             guard let id = UUID(uuidString: category.id) else { return nil }
-            let currentLimit = try limits.limit(categoryID: id, on: today, in: db)
+            let currentLimit = try categoryLimits.limit(categoryID: id, on: today, in: db)
             return CadenceSwitchLine(
                 categoryID: id,
                 categoryName: category.name,
@@ -98,6 +114,11 @@ nonisolated struct CadenceSwitch: Sendable {
             from: schedule.cadence,
             to: cadence,
             effectiveFrom: effectiveFrom,
+            currentPeriodID: periodID,
+            overallCurrent: overallCurrent,
+            overallSuggested: overallCurrent.flatMap {
+                LimitScaling.suggested(limit: $0, from: schedule.cadence, to: cadence)
+            },
             lines: lines
         )
     }
@@ -105,16 +126,39 @@ nonisolated struct CadenceSwitch: Sendable {
     /// Commits a plan, with whatever limits the user settled on.
     ///
     /// `limits` is keyed by category and holds the figure shown on the confirmation
-    /// screen, edited or not. A category absent from it keeps whatever limit it
-    /// already had — which is the right behaviour for a category the user had not
-    /// budgeted, and is why the screen sends back everything it displayed.
+    /// screen, edited or not; `overallLimit` is that same figure for the whole-
+    /// period budget. Either being absent/nil means "leave that limit as it was" —
+    /// the right behaviour for something the user had not budgeted, and why the
+    /// screen sends back everything it displayed rather than only what changed.
+    ///
+    /// The switch itself does **not** take effect here (DEC-043): it is recorded
+    /// as pending, and `PeriodGenerator` promotes it once `plan.effectiveFrom`
+    /// actually arrives. What does happen now is extending the currently-open
+    /// period to reach that date, so no day is ever left without one.
     ///
     /// The pay schedule is deliberately untouched (DEC-036): "a user switching from
     /// fortnightly to monthly budgeting has not changed jobs."
-    func apply(_ plan: CadenceSwitchPlan, limits: [UUID: Money], in db: Database) throws {
+    func apply(_ plan: CadenceSwitchPlan, overallLimit: Money?, limits: [UUID: Money], in db: Database) throws {
+        let timestamp = IngestFunnel.iso8601.format(now())
+        try db.execute(
+            sql: """
+            UPDATE periods SET ends_on = ?, updated_at = ?, change_seq = ? WHERE id = ?
+            """,
+            arguments: [
+                plan.effectiveFrom.addingDays(-1).iso, timestamp,
+                try AppDatabase.nextChangeSeq(db), plan.currentPeriodID.uuidString,
+            ]
+        )
+
         var settings = try BudgetSettingsStore(now: now).load(db)
-        settings.schedule = PeriodSchedule(anchor: plan.effectiveFrom, cadence: plan.to)
+        settings.pendingSchedule = PeriodSchedule(anchor: plan.effectiveFrom, cadence: plan.to)
         try BudgetSettingsStore(now: now).save(settings, in: db)
+
+        if let overallLimit {
+            try OverallLimits(now: now, makeID: makeID).setLimit(
+                amount: overallLimit, effectiveFrom: plan.effectiveFrom, in: db
+            )
+        }
 
         let store = CategoryLimits(now: now, makeID: makeID)
         for line in plan.lines {

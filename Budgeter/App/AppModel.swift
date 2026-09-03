@@ -94,12 +94,11 @@ final class AppModel {
                 }
 
                 var settings = try BudgetSettingsStore().load(db)
-                let schedule = PeriodSchedule(anchor: answers.nextPayday, cadence: answers.cadence)
-                settings.schedule = schedule
-                // DEC-036 pre-fills the pay schedule from these same answers, so the
-                // reminder becomes a confirm step later rather than a second
-                // interrogation. Nothing is scheduled yet — that is Sprint 4.
-                settings.paySchedule = schedule
+                settings.schedule = answers.schedule
+                // DEC-043: payday is no longer asked here. `paySchedule` stays nil
+                // until the user visits Settings → Payday and gives a real payday
+                // date — a different question from "how should the budget period
+                // run", which DEC-036 already kept as a separate schema field.
                 try BudgetSettingsStore().save(settings, in: db)
             }
             await start()
@@ -141,8 +140,9 @@ final class AppModel {
 nonisolated struct OnboardingAnswers: Equatable, Sendable {
     var accountName: String
     var currency: Currency
-    /// DEC-007: the user's *next* payday, which is a real-world fact they know.
-    var nextPayday: CivilDate
-    var cadence: Cadence
+    /// DEC-043: computed by `CalendarCadence`, not asked for as a date — the only
+    /// question onboarding still poses is fortnightly's cycle phase, and that is
+    /// folded into this anchor before it ever reaches here.
+    var schedule: PeriodSchedule
     var categoryNames: [String]
 }
