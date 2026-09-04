@@ -64,31 +64,30 @@ struct CadenceSwitchTests {
         }
     }
 
-    @Test("every category is listed, with a scaled suggestion where there is one")
+    @Test("every category is listed, with the limit that applies now")
     func everyCategoryIsOffered() throws {
         let database = try Fixture.database()
         try database.writer.write { db in
             let (_, groceries) = try configured(db)
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
 
-            // DEC-008: "show every category with a scaled-and-rounded suggested
-            // limit the user can edit" — every category, not only the budgeted ones,
-            // because a switch is a natural moment to set the ones you skipped.
+            // DEC-008: show every category the user can edit — every category, not
+            // only the budgeted ones, because a switch is a natural moment to set the
+            // ones you skipped.
             #expect(plan.lines.count == CategoryStore.starters.count)
 
+            // The limit in force, reported as context and nothing more. DEC-044: a
+            // plan proposes no figure of its own, so there is nothing here for the
+            // confirmation to prefill a field with — it opens them at zero.
             let line = try #require(plan.lines.first { $0.categoryID == groceries })
             #expect(line.currentLimit == Money(minorUnits: 20000, currency: .aud))
-            #expect(line.suggestedLimit == Money(minorUnits: 43500, currency: .aud))
 
-            // A category with no limit gets no suggestion: there is nothing to
-            // scale, and a zero would be a decision nobody made.
             let unbudgeted = try #require(plan.lines.first { $0.categoryID != groceries })
             #expect(unbudgeted.currentLimit == nil)
-            #expect(unbudgeted.suggestedLimit == nil)
         }
     }
 
-    @Test("the overall budget is offered and scaled the same way a category is")
+    @Test("the overall budget is reported the same way a category's is")
     func overallBudgetIsOffered() throws {
         let database = try Fixture.database()
         try database.writer.write { db in
@@ -101,7 +100,6 @@ struct CadenceSwitchTests {
 
             let plan = try CadenceSwitch().plan(to: .monthly, asOf: try date("2026-09-02"), in: db)
             #expect(plan.overallCurrent == Money(minorUnits: 40000, currency: .aud))
-            #expect(plan.overallSuggested == Money(minorUnits: 87000, currency: .aud))
         }
     }
 

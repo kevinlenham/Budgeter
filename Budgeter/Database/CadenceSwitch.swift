@@ -2,11 +2,13 @@
 //  CadenceSwitch.swift
 //  Budgeter
 //
-//  DEC-008 asked for one thing from a cadence switch: "show every category with a
-//  scaled-and-rounded suggested limit the user can edit." DEC-043 changed *when*
-//  it takes effect — immediately, not at a future boundary — after finding in
+//  DEC-008 asked for one thing from a cadence switch: show every category, with a
+//  limit the user can edit before anything is written. DEC-043 changed *when* it
+//  takes effect — immediately, not at a future boundary — after finding in
 //  practice that waiting (up to three weeks, for a switch to monthly) felt broken
-//  rather than careful.
+//  rather than careful. DEC-044 dropped the scaled suggestion DEC-008 asked to
+//  seed those fields with: a plan now reports what each limit *is*, and the user
+//  types what it should become.
 //
 //  A switch now truncates the currently-open period to end yesterday and starts a
 //  fresh one today under the new cadence, with its own budget — the current
@@ -38,11 +40,11 @@ nonisolated struct CadenceSwitchLine: Equatable, Sendable, Identifiable {
     var categoryID: UUID
     var categoryName: String
     /// What the limit is under the old cadence, or nil if the category has none.
+    ///
+    /// Shown, but never carried forward: a limit only means anything alongside the
+    /// period length it was set for, so the confirmation offers it as context for
+    /// the figure the user is about to type, not as a starting point.
     var currentLimit: Money?
-    /// What it would become, scaled and rounded (`LimitScaling`). Nil when there is
-    /// nothing to scale, or when the arithmetic overflowed — in which case the
-    /// screen shows an empty field and the user types a figure themselves.
-    var suggestedLimit: Money?
 
     var id: UUID {
         categoryID
@@ -64,7 +66,6 @@ nonisolated struct CadenceSwitchPlan: Equatable, Sendable {
     /// truncate — `apply` retires the row instead of writing an invalid range.
     var currentPeriodStartsOn: CivilDate
     var overallCurrent: Money?
-    var overallSuggested: Money?
     var lines: [CadenceSwitchLine]
 }
 
@@ -93,10 +94,7 @@ nonisolated struct CadenceSwitch: Sendable {
             return CadenceSwitchLine(
                 categoryID: id,
                 categoryName: category.name,
-                currentLimit: currentLimit,
-                suggestedLimit: currentLimit.flatMap {
-                    LimitScaling.suggested(limit: $0, from: schedule.cadence, to: cadence)
-                }
+                currentLimit: currentLimit
             )
         }
 
@@ -107,9 +105,6 @@ nonisolated struct CadenceSwitch: Sendable {
             currentPeriodID: periodID,
             currentPeriodStartsOn: currentStartsOn,
             overallCurrent: overallCurrent,
-            overallSuggested: overallCurrent.flatMap {
-                LimitScaling.suggested(limit: $0, from: schedule.cadence, to: cadence)
-            },
             lines: lines
         )
     }

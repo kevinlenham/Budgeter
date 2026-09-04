@@ -201,6 +201,8 @@ All ingestion goes through **one upsert funnel function**. There is no other wri
 
 **Choice** — The switch takes effect at the next period boundary. On confirmation, show every category with a scaled-and-rounded suggested limit the user can edit.
 
+> Superseded in two steps: DEC-043 makes the switch immediate, and DEC-044 drops the scaled suggestion — the confirmation opens every budget at zero. The effective-dating below is untouched and still governs.
+
 **Reasoning** — Waiting for the boundary means partial periods never exist, and "spent this period" never jumps for invisible reasons. A $200 limit is meaningless without its cadence, so a switch must do *something* with limits: silent scaling produces numbers no human chose ($92.31) with no visible origin; resetting throws away the user's setup and most people will abandon the switch. Prompting with a sensible pre-fill is the only option that is both correct and kind.
 
 **Schema consequence** — Limits are **effective-dated rows**, and each period **snapshots the limit in force at its start**. A past period must display the limit that applied *then*, not today's. Without this, editing a limit silently rewrites history.
@@ -997,6 +999,31 @@ This is the DEC-032/033 pattern: implementation revealed a recorded decision was
 - Every existing period-schedule mechanism (`PeriodSchedule`, `index(containing:)`, lazy generation, negative indices before an anchor) is untouched. DEC-043 changes what an anchor *means* and where it comes from, not the arithmetic that turns an anchor and a cadence into dates.
 
 ---
+
+## DEC-044 — A cadence switch suggests no budgets; every figure starts at zero
+
+**Context** — DEC-008 required the cadence-switch confirmation to show "every category with a scaled-and-rounded suggested limit the user can edit", and `LimitScaling` produced those suggestions: scale by the ratio of period lengths, then round to the nearest $1 or $5 so the figure looks like one a person would have typed. Using it, the suggestions were the wrong answer often enough to be worth nothing — a fortnight's groceries is not half a month's for anyone who shops weekly, and rent inside an overall budget does not scale at all. Editing a wrong number that is already in the field is more work than typing the right one into an empty one, and a prefilled figure invites being accepted rather than considered.
+
+**Options considered**
+- Keep the scaled suggestion; it is at least a starting point
+- Prefill with the *old* figure unscaled, and let the user adjust
+- Suggest nothing: open every budget the switch touches at zero
+
+**Choice** — Suggest nothing. The confirmation opens the overall budget and every category that currently has a limit at `0`, with the figure in force shown beneath it as "now $x". `CadenceSwitchPlan` no longer carries a suggestion at all, and `LimitScaling` is deleted.
+
+**Reasoning**
+
+*Why zero and not blank.* A blank field means "leave this limit alone" in `CadenceSwitch.apply`, and leaving a limit alone across a cadence change is the one outcome that is definitely wrong — a weekly $200 quietly becomes a monthly $200. Zero is a figure the user must look at and replace, which is the whole point; blank is a figure they can miss.
+
+*Why categories with no limit stay blank.* They were not budgeted before the switch, and starting to budget them is a decision for the user rather than a side effect of changing the period. A zero there would put the category over budget on its first dollar. This is the same asymmetry DEC-008 drew for suggestions, kept for the same reason.
+
+*Why the old figure is still shown.* The switch has to be answerable without leaving the sheet. "now $200" alongside a period length the user just chose is the context needed to type a new number; it is not a default, because it is not in the field.
+
+**Consequences**
+- `LimitScaling` and its tests are gone. `CadenceSwitchLine.suggestedLimit` and `CadenceSwitchPlan.overallSuggested` are gone with them — a plan now reports only what each limit *is*.
+- DEC-008's "scaled-and-rounded suggestion" clause is superseded. Its underlying objection — that a switch must never write a figure no human chose — is not just preserved but taken to its conclusion: the app now proposes nothing.
+- A switch costs the user more typing than it did. That is the intended trade: it is a rare action, and the figures it sets govern every period that follows.
+
 
 # Open items
 

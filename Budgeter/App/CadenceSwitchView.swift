@@ -15,10 +15,10 @@
 //  one starts today, and every budget the switch touches is shown and editable
 //  there.
 //
-//  Silent scaling still produces numbers no human chose, and resetting every limit
-//  still throws away the user's setup — DEC-008's other two objections stand, which
-//  is why the switch still passes through a confirmation rather than happening from
-//  a plain cadence toggle.
+//  Silent scaling still produces numbers no human chose — DEC-008's objection to
+//  it stands, and DEC-044 takes it further: the app does not guess at all any more,
+//  it just asks. That is why the switch still passes through a confirmation rather
+//  than happening from a plain cadence toggle.
 //
 //  The split between the two halves of this file is the point. The *screen* is a
 //  cadence picker and nothing else: budgets are not what anyone came here to look
@@ -31,9 +31,9 @@
 //  - **that it is immediate**, because a switch with no visible effect looks broken
 //    the other way;
 //  - **every budget it affects** — the whole-period figure first, since DEC-043
-//    made that the primary number, then each category — with an editable
-//    suggestion, because the point is that the user chooses these figures rather
-//    than finding them chosen.
+//    made that the primary number, then each category — starting at zero with the
+//    old figure shown beneath it, because the point is that the user chooses these
+//    figures rather than finding them chosen.
 //
 
 import GRDB
@@ -198,17 +198,30 @@ private struct CadenceSwitchConfirmation: View {
         self.database = database
         self.plan = plan
         self.onSwitched = onSwitched
-        // No suggestion means nothing to scale, and the field shows its "None"
-        // placeholder — the honest reading, since a zero would be a decision nobody
-        // made.
+        // Every budget starts at zero, and every budget the user had is shown
+        // underneath it as "now $x" so they have something to type against. DEC-044:
+        // a figure carried over or scaled from a different period length is a number
+        // nobody chose, and the app has no idea what the right one is — a fortnight's
+        // groceries is not half a month's for anyone who shops weekly.
+        //
+        // Zero rather than blank, because these are the figures that will apply and a
+        // blank one would quietly leave the old cadence's limit in force. Categories
+        // with no limit at all stay blank: they were not budgeted before, and starting
+        // to budget them is a decision for the user, not a side effect of a switch.
         _overallAmount = State(
-            initialValue: plan.overallSuggested.map { MoneyText.editableString(from: $0) } ?? ""
+            initialValue: plan.overallCurrent.map { Self.zero(like: $0) } ?? ""
         )
         _amounts = State(initialValue: plan.lines.reduce(into: [:]) { result, line in
-            if let suggested = line.suggestedLimit {
-                result[line.categoryID] = MoneyText.editableString(from: suggested)
+            if let current = line.currentLimit {
+                result[line.categoryID] = Self.zero(like: current)
             }
         })
+    }
+
+    /// "0" in the currency's own precision, so the field opens with something the
+    /// money parser will accept back unchanged.
+    private static func zero(like money: Money) -> String {
+        MoneyText.editableString(from: Money(minorUnits: 0, currency: money.currency))
     }
 
     var body: some View {
@@ -244,14 +257,15 @@ private struct CadenceSwitchConfirmation: View {
             if !plan.lines.isEmpty {
                 Section {
                     ForEach(plan.lines) { line in
-                        LimitSuggestionRow(line: line, text: binding(for: line))
+                        CategoryLimitRow(line: line, text: binding(for: line))
                     }
                 } header: {
                     Text("Category budgets")
                 } footer: {
-                    Text("Suggestions are your current limits scaled to the new period "
-                        + "length and rounded. Change anything that looks wrong — these are "
-                        + "the figures that will apply.")
+                    Text("Budgets start at zero because a limit set for a "
+                        + "\(plan.from.title.lowercased()) period does not mean the same thing "
+                        + "over a \(plan.to.title.lowercased()) one. What you type here is what "
+                        + "will apply.")
                 }
             }
 
@@ -289,17 +303,17 @@ private struct CadenceSwitchConfirmation: View {
         isSaving = true
         errorMessage = nil
 
-        let overallCurrency = plan.overallCurrent?.currency ?? plan.overallSuggested?.currency ?? .aud
+        let overallCurrency = plan.overallCurrent?.currency ?? .aud
         let overallLimit = overallAmount.trimmedOrNil
             .flatMap { try? MoneyText.money(from: $0, currency: overallCurrency) }
 
-        // A blank field is "leave this category alone", not "set it to zero": the
-        // suggestion is absent exactly when there was no limit to scale, and
-        // inventing a zero limit would budget the user to nothing without them
-        // typing a number.
+        // A blank field is "leave this category alone", not "set it to zero". It is
+        // blank exactly when the category had no limit to begin with, and inventing
+        // a zero limit for one the user never budgeted would put it over budget on
+        // the first dollar without them typing a number.
         var collected: [UUID: Money] = [:]
         for line in plan.lines {
-            let currency = line.currentLimit?.currency ?? line.suggestedLimit?.currency ?? .aud
+            let currency = line.currentLimit?.currency ?? .aud
             guard let text = amounts[line.categoryID]?.trimmedOrNil,
                   let amount = try? MoneyText.money(from: text, currency: currency)
             else { continue }
@@ -323,7 +337,7 @@ private struct CadenceSwitchConfirmation: View {
     }
 }
 
-private struct LimitSuggestionRow: View {
+private struct CategoryLimitRow: View {
     let line: CadenceSwitchLine
     @Binding var text: String
 

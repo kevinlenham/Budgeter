@@ -63,12 +63,19 @@ struct CadenceSwitchJourneyTests {
 
     /// Settings → Budget period → pick → Switch, then `AppModel.start()`'s generate,
     /// then the launches that follow over the next six weeks.
+    ///
+    /// The figures stand in for what the user types on the confirmation sheet, which
+    /// since DEC-044 is the only place they can come from — the sheet opens every
+    /// budgeted line at zero and the app suggests nothing.
     private func switchCadence(to cadence: Cadence, asOf today: CivilDate, in db: Database) throws {
         let plan = try CadenceSwitch().plan(to: cadence, asOf: today, in: db)
         let limits = plan.lines.reduce(into: [UUID: Money]()) { result, line in
-            result[line.categoryID] = line.suggestedLimit
+            guard line.currentLimit != nil else { return }
+            result[line.categoryID] = Money(minorUnits: 30000, currency: .aud)
         }
-        try CadenceSwitch().apply(plan, overallLimit: plan.overallSuggested, limits: limits, in: db)
+        try CadenceSwitch().apply(
+            plan, overallLimit: Money(minorUnits: 300_000, currency: .aud), limits: limits, in: db
+        )
 
         try PeriodGenerator().generate(through: today, in: db)
         for ahead in 1 ... 42 {
