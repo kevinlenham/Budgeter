@@ -10,16 +10,23 @@
 //  truncate the current period and make "spent this period" jump for invisible
 //  reasons. DEC-043 revisits that: waiting for a boundary meant waiting up to three
 //  weeks for a switch to monthly, which felt broken rather than careful. Truncating
-//  is no longer invisible, because this screen shows exactly what it does before it
-//  happens — the current period ends today, a new one starts today, and every
-//  budget the switch touches is shown and editable in the same place.
+//  is no longer invisible, because the switch is confirmed on a sheet that shows
+//  exactly what it does before it happens — the current period ends today, a new
+//  one starts today, and every budget the switch touches is shown and editable
+//  there.
 //
 //  Silent scaling still produces numbers no human chose, and resetting every limit
 //  still throws away the user's setup — DEC-008's other two objections stand, which
-//  is why this screen still exists rather than the switch happening from a plain
-//  cadence toggle.
+//  is why the switch still passes through a confirmation rather than happening from
+//  a plain cadence toggle.
 //
-//  Two things this screen must communicate, and does:
+//  The split between the two halves of this file is the point. The *screen* is a
+//  cadence picker and nothing else: budgets are not what anyone came here to look
+//  at, and having every category's limit sitting under the picker made the page
+//  read as a budget editor that also happened to change the period. The *sheet* is
+//  where the consequences live, and it appears only once the user has asked to
+//  switch — at which point the two things DEC-008 demands are exactly what it has
+//  to say:
 //
 //  - **that it is immediate**, because a switch with no visible effect looks broken
 //    the other way;
@@ -42,11 +49,9 @@ struct CadenceSwitchView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var chosen: Cadence
-    @State private var plan: CadenceSwitchPlan?
-    @State private var overallAmount = ""
-    @State private var amounts: [UUID: String] = [:]
+    @State private var pending: PendingSwitch?
+    @State private var isPlanning = false
     @State private var errorMessage: String?
-    @State private var isSaving = false
 
     init(database: AppDatabase, current: Cadence, onSwitched: @escaping () -> Void = {}) {
         self.database = database
@@ -67,48 +72,16 @@ struct CadenceSwitchView: View {
             } header: {
                 Text("Budget period")
             } footer: {
-                if let plan, plan.from != plan.to {
-                    Text(switchDescription(plan))
-                } else {
-                    Text(Self.cadenceDescription(chosen))
-                }
+                Text(Self.cadenceDescription(chosen))
             }
 
-            if let plan, plan.from != plan.to {
+            if chosen != current {
                 Section {
-                    HStack {
-                        Text("Overall budget")
-                        Spacer()
-                        TextField("None", text: $overallAmount)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                            .font(.body.monospacedDigit())
-                            .frame(maxWidth: 110)
-                    }
-                    if let current = plan.overallCurrent {
-                        Text("now \(MoneyText.string(from: current))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("From \(shortDate(plan.effectiveFrom))")
-                } footer: {
-                    Text("The whole-period number the Budget tab leads with. Category "
-                        + "budgets below are optional on top of this, not instead of it.")
-                }
-
-                if !plan.lines.isEmpty {
-                    Section {
-                        ForEach(plan.lines) { line in
-                            LimitSuggestionRow(line: line, text: binding(for: line))
-                        }
-                    } header: {
-                        Text("Category budgets")
-                    } footer: {
-                        Text("Suggestions are your current limits scaled to the new period "
-                            + "length and rounded. Change anything that looks wrong — these are "
-                            + "the figures that will apply.")
-                    }
+                    Text("Switching takes effect immediately: today's period ends today, and "
+                        + "your new \(chosen.title.lowercased()) period starts right now. "
+                        + "You'll get a chance to set your budgets for it first.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -120,34 +93,28 @@ struct CadenceSwitchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Switch", action: apply)
-                    .disabled(!isSwitchable || isSaving)
+                Button("Switch") { Task { await beginSwitch() } }
+                    .disabled(chosen == current || isPlanning)
             }
         }
-        .task(id: chosen) { await reload() }
-    }
-
-    /// Enabled only when there is a loaded plan that describes *this* picker
-    /// selection and actually changes something.
-    ///
-    /// Deliberately not `chosen != current`. `current` is what Settings believed
-    /// the cadence was when it built this screen; `plan` is what the database says,
-    /// for the cadence currently selected. Keying the button off the plan is what
-    /// makes it impossible to commit a plan for a cadence that is no longer on
-    /// screen — the failure below.
-    private var isSwitchable: Bool {
-        guard let plan else { return false }
-        return plan.to == chosen && plan.from != plan.to
-    }
-
-    private func shortDate(_ date: CivilDate) -> String {
-        date.middayDate().formatted(.dateTime.day().month(.abbreviated))
-    }
-
-    private func switchDescription(_ plan: CadenceSwitchPlan) -> String {
-        "Switching takes effect immediately: today's period ends today, and your "
-            + "new \(plan.to.title.lowercased()) period starts right now. Anything you've "
-            + "already spent or logged stays exactly where it is."
+        // `item:` rather than a bool: the sheet is built from one specific plan, and
+        // binding it to the plan itself is what makes it impossible to show a sheet
+        // for a cadence the plan was not computed for.
+        .sheet(item: $pending) { pending in
+            NavigationStack {
+                CadenceSwitchConfirmation(
+                    database: database,
+                    plan: pending.plan,
+                    onSwitched: {
+                        onSwitched()
+                        dismiss()
+                    }
+                )
+            }
+        }
+        // Choosing a different cadence and changing your mind should not leave a
+        // stale failure on screen.
+        .onChange(of: chosen) { _, _ in errorMessage = nil }
     }
 
     private static func cadenceDescription(_ cadence: Cadence) -> String {
@@ -163,49 +130,152 @@ struct CadenceSwitchView: View {
 
     // MARK: - Actions
 
-    /// Recomputed whenever the cadence picker moves, because every suggestion on
-    /// screen depends on which cadence is being switched *to*. Writes nothing —
-    /// `CadenceSwitch.plan` exists precisely so this screen can show the
+    /// Reads the plan for the chosen cadence and opens the confirmation. Writes
+    /// nothing — `CadenceSwitch.plan` exists precisely so this screen can show the
     /// consequences before any of them happen.
     ///
-    /// Clears `plan` *before* reading, and never leaves a stale one behind on
-    /// failure. A plan is a proposal for one specific cadence, so a plan for the
-    /// previous selection is not a worse version of this one — it is an answer to a
-    /// different question, and `apply` cannot tell the difference. GRDB 7 cancels an
-    /// in-flight read when `.task(id:)` cancels this task, which is what a quick
-    /// second tap on the segmented picker does, so "the read for the cadence on
-    /// screen failed while an older one succeeded" is the ordinary case, not an
-    /// exotic one.
-    private func reload() async {
-        plan = nil
+    /// The plan is read here rather than on every move of the picker because a plan
+    /// is a proposal for one specific cadence, and the only moment one is needed is
+    /// the moment the user asks to switch to it. Reading it on demand is also what
+    /// leaves nothing on screen to keep in sync: the sheet owns the plan it was
+    /// opened with, so `apply` cannot commit a plan for a cadence that has since
+    /// moved on.
+    private func beginSwitch() async {
+        guard chosen != current else { return }
+        isPlanning = true
         errorMessage = nil
-        overallAmount = ""
-        amounts = [:]
+        defer { isPlanning = false }
         do {
             let today = CivilDate.today()
             let cadence = chosen
-            let loaded = try await database.writer.read { db in
+            let plan = try await database.writer.read { db in
                 try CadenceSwitch().plan(to: cadence, asOf: today, in: db)
             }
-            // The picker may have moved again while the read was in flight.
+            // The picker may have moved again while the read was in flight, and a
+            // plan for a cadence that is no longer selected is an answer to a
+            // different question.
             guard cadence == chosen else { return }
-            plan = loaded
-            // No suggestion means nothing to scale, and the field shows its "None"
-            // placeholder — the honest reading, since a zero would be a decision
-            // nobody made.
-            overallAmount = loaded.overallSuggested.map { MoneyText.editableString(from: $0) } ?? ""
-            amounts = loaded.lines.reduce(into: [:]) { result, line in
-                if let suggested = line.suggestedLimit {
-                    result[line.categoryID] = MoneyText.editableString(from: suggested)
-                }
+            // `plan.from` is what the database says the cadence is, which is the
+            // only opinion that counts; `current` is what Settings believed when it
+            // built this screen. A plan that changes nothing would still truncate
+            // the period in progress — a switch that looks like it did nothing
+            // while quietly ending today's period.
+            guard plan.from != plan.to else {
+                errorMessage = "You are already budgeting \(plan.to.title.lowercased())."
+                return
             }
-            errorMessage = nil
+            pending = PendingSwitch(plan: plan)
         } catch is CancellationError {
-            // The picker moved again and this read was superseded. Not a failure to
-            // report — another reload is already running for the new selection.
+            // Superseded or dismissed; nothing to report.
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+}
+
+/// Wraps a plan so `.sheet(item:)` can present it. `CadenceSwitchPlan` is a value
+/// from the database layer and has no business carrying an identity for SwiftUI's
+/// benefit.
+private struct PendingSwitch: Identifiable {
+    let id = UUID()
+    let plan: CadenceSwitchPlan
+}
+
+/// The confirmation: what the switch does, and every budget it touches, editable.
+private struct CadenceSwitchConfirmation: View {
+    let database: AppDatabase
+    let plan: CadenceSwitchPlan
+    let onSwitched: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var overallAmount: String
+    @State private var amounts: [UUID: String]
+    @State private var errorMessage: String?
+    @State private var isSaving = false
+
+    init(database: AppDatabase, plan: CadenceSwitchPlan, onSwitched: @escaping () -> Void) {
+        self.database = database
+        self.plan = plan
+        self.onSwitched = onSwitched
+        // No suggestion means nothing to scale, and the field shows its "None"
+        // placeholder — the honest reading, since a zero would be a decision nobody
+        // made.
+        _overallAmount = State(
+            initialValue: plan.overallSuggested.map { MoneyText.editableString(from: $0) } ?? ""
+        )
+        _amounts = State(initialValue: plan.lines.reduce(into: [:]) { result, line in
+            if let suggested = line.suggestedLimit {
+                result[line.categoryID] = MoneyText.editableString(from: suggested)
+            }
+        })
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Your \(plan.from.title.lowercased()) period ends today, and your first "
+                    + "\(plan.to.title.lowercased()) period starts right now. Anything you've "
+                    + "already spent or logged stays exactly where it is.")
+            }
+
+            Section {
+                HStack {
+                    Text("Overall budget")
+                    Spacer()
+                    TextField("None", text: $overallAmount)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .font(.body.monospacedDigit())
+                        .frame(maxWidth: 110)
+                }
+                if let current = plan.overallCurrent {
+                    Text("now \(MoneyText.string(from: current))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("From \(shortDate(plan.effectiveFrom))")
+            } footer: {
+                Text("The whole-period number the Budget tab leads with. Category "
+                    + "budgets below are optional on top of this, not instead of it.")
+            }
+
+            if !plan.lines.isEmpty {
+                Section {
+                    ForEach(plan.lines) { line in
+                        LimitSuggestionRow(line: line, text: binding(for: line))
+                    }
+                } header: {
+                    Text("Category budgets")
+                } footer: {
+                    Text("Suggestions are your current limits scaled to the new period "
+                        + "length and rounded. Change anything that looks wrong — these are "
+                        + "the figures that will apply.")
+                }
+            }
+
+            if let errorMessage {
+                Section { Text(errorMessage).foregroundStyle(.red) }
+            }
+        }
+        .navigationTitle("Switch to \(plan.to.title.lowercased())")
+        .navigationBarTitleDisplayMode(.inline)
+        .interactiveDismissDisabled(isSaving)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { dismiss() }
+                    .disabled(isSaving)
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Switch", action: apply)
+                    .disabled(isSaving)
+            }
+        }
+    }
+
+    private func shortDate(_ date: CivilDate) -> String {
+        date.middayDate().formatted(.dateTime.day().month(.abbreviated))
     }
 
     private func binding(for line: CadenceSwitchLine) -> Binding<String> {
@@ -216,18 +286,8 @@ struct CadenceSwitchView: View {
     }
 
     private func apply() {
-        // Re-asserted rather than trusted to `isSwitchable` having disabled the
-        // button: a plan for the wrong cadence commits a switch the user did not
-        // ask for, and a plan whose `from` equals its `to` truncates the period in
-        // progress to change nothing at all — a switch that looks like it did
-        // nothing while quietly ending today's period. Neither is worth leaving to
-        // the toolbar. Reported, never a silent `return`: "the button did nothing"
-        // is the symptom this whole guard exists to stop.
-        guard let plan, plan.to == chosen, plan.from != plan.to else {
-            errorMessage = "Could not read your current budget period. Go back and try again."
-            return
-        }
         isSaving = true
+        errorMessage = nil
 
         let overallCurrency = plan.overallCurrent?.currency ?? plan.overallSuggested?.currency ?? .aud
         let overallLimit = overallAmount.trimmedOrNil
@@ -246,14 +306,15 @@ struct CadenceSwitchView: View {
             collected[line.categoryID] = amount
         }
         let limits = collected
+        let plan = self.plan
 
         Task {
             do {
                 try await database.writer.write { db in
                     try CadenceSwitch().apply(plan, overallLimit: overallLimit, limits: limits, in: db)
                 }
-                onSwitched()
                 dismiss()
+                onSwitched()
             } catch {
                 errorMessage = String(describing: error)
                 isSaving = false

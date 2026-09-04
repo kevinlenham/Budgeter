@@ -993,6 +993,7 @@ This is the DEC-032/033 pattern: implementation revealed a recorded decision was
 - Onboarding drops the "next payday" date picker for the budget schedule entirely. It keeps one question — fortnightly's phase — and nothing else.
 - The Budget tab now leads with the overall figure and names the active cadence in its own title — the visibility gap that started this whole conversation, solved by making a switch visibly happen rather than by adding a banner for one still pending.
 - `CadenceSwitch.apply` truncates (or, in the same-day edge case, retires) the current period and writes the new schedule directly — no pending state, no promotion step, no second thing for `PeriodGenerator` to know about. A switch is one write, immediately visible.
+- The confirmation is a sheet, not the settings screen itself. Settings → Budget period is a cadence picker and nothing else; the budgets the switch touches only appear once the user has actually asked to switch. Showing every category limit permanently under the picker made that page read as a budget editor that also happened to change the period, and buried the one control it exists for.
 - Every existing period-schedule mechanism (`PeriodSchedule`, `index(containing:)`, lazy generation, negative indices before an anchor) is untouched. DEC-043 changes what an anchor *means* and where it comes from, not the arithmetic that turns an anchor and a cadence into dates.
 
 ---
