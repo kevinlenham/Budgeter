@@ -74,6 +74,7 @@ struct ExportView: View {
             }
         }
         .navigationTitle("Your data")
+        .themedForm()
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
             restore(from: result)

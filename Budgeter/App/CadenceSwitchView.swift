@@ -90,6 +90,7 @@ struct CadenceSwitchView: View {
             }
         }
         .navigationTitle("Budget period")
+        .themedForm()
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -274,6 +275,7 @@ private struct CadenceSwitchConfirmation: View {
             }
         }
         .navigationTitle("Switch to \(plan.to.title.lowercased())")
+        .themedForm()
         .navigationBarTitleDisplayMode(.inline)
         .interactiveDismissDisabled(isSaving)
         .toolbar {

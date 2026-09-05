@@ -72,6 +72,7 @@ struct PayReminderView: View {
             }
         }
         .navigationTitle("Payday")
+        .themedForm()
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .onChange(of: anchor) { _, _ in saveSchedule() }

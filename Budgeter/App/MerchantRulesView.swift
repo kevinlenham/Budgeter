@@ -59,6 +59,7 @@ struct MerchantRulesView: View {
             }
         }
         .navigationTitle("Merchants")
+        .themedForm()
         .task { await observe() }
     }
 

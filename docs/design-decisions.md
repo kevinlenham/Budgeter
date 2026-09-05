@@ -1025,6 +1025,38 @@ This is the DEC-032/033 pattern: implementation revealed a recorded decision was
 - A switch costs the user more typing than it did. That is the intended trade: it is a rare action, and the figures it sets govern every period that follows.
 
 
+## DEC-045 — Four tabs, one zoomable Finances screen, and a chosen theme
+
+**Context** — The app shipped three tabs: Ledger, Budget, Settings. Ledger was every transaction ever recorded, newest first; Budget was the current period's limits. Both were stock `List` screens with no visual grouping, and neither answered the question the app is actually opened to answer — "am I alright?" — without the user assembling it from two screens. There was also no home: the first thing on launch was an undifferentiated list of purchases.
+
+**Options considered**
+- Keep the three tabs and restyle them
+- Add a dashboard as a fourth tab, keeping Ledger and Budget
+- Add a dashboard, and fold Ledger and Budget into one screen with a scale selector
+
+**Choice** — Four tabs: Overview, Finances, Statistics, Settings. Overview is a dashboard of summary cards. Finances is a single screen at three zoom levels — day, week, and one budget period — showing what that range cost, a category breakdown, and the entries behind it. Statistics is new: spending by category, income against expenses, and cumulative spend against budget pace. The full transaction archive moves to a pushed screen behind the Overview's "See all". The app also gains a light theme and a three-way appearance control, defaulting to dark.
+
+**Reasoning**
+
+*Why Ledger and Budget merge.* They were the same data cut two ways. "What did today cost" and "how am I doing against my limits" differ only in how wide a range is being asked about, so they are one screen with a range control rather than two screens with two layouts. The old Budget tab is the new Finances screen at its widest setting.
+
+*Why the widest scale is the period and not a calendar month.* The obvious third scale is a month, and it is wrong here. Limits, `periods`, and every figure in `period_overall_status` are defined per cadence, so on a fortnightly budget a calendar-month total reconciles with nothing else in the app. The scale is the budget period and takes the cadence's name — "Fortnight", or "Month" when the cadence is monthly. On a weekly cadence the period *is* the week, so the scale collapses to two rather than showing one range under two names.
+
+*Why limits appear only at the period scale.* A limit belongs to a period. Showing a category's limit beside one day's spending invites reading "$12 of $400" as though the day had a budget of its own. At the narrower scales the same rows show spending alone, and the summary card compares against the pace the period's budget implies — which is `SafeToSpend`'s existing even-spread assumption, restated over a range.
+
+*Why the archive is not a tab.* A list of every transaction ever made is something a person goes looking for occasionally, not something they open the app to read. It keeps its day grouping by `booked_on` (DEC-009) and its behaviour; it loses only its place in the tab bar.
+
+*Why the theme defaults to dark rather than to the system.* This app is opened in the evening, at a checkout, in a car. A white flash is the wrong thing to hand someone in any of those. Following the system is offered as one of three explicit choices; it is simply not what a fresh install does. The preference is `AppStorage`, not a database row: it is a device setting, has no business in an export, and should not be restored onto a different phone.
+
+*Why colours are named by role.* `Palette` names every colour by the job it does — income, expense, warning, accent — and both themes are selected per token rather than derived by flipping lightness. The chart ramp is the one set not chosen by eye: it is validated for colour-vision separation and for contrast against the card surface in both themes, and it is assigned to categories by creation order rather than by spend rank, so a category keeps its colour when it stops being the largest line.
+
+**Consequences**
+- `BudgetView` and `LedgerView` are deleted. `BudgetSnapshot` survives them as a standalone type — it is pure data, and the tests that assert on it are asserting about the budget, not about a tab.
+- DEC-036's payday card moves from the top of the ledger to the Overview, where a question the app is asking is actually seen rather than scrolled past.
+- Statistics is the first screen to read across periods (`InsightQueries.flows`), and the first to need spending aggregated by day and by category over an arbitrary range.
+- The settings sub-screens keep native `Form`s and take the palette rather than being rebuilt as card stacks. Text fields, toggles, pickers and swipe-to-delete are all things the platform list does better than a stack of cards imitating one.
+- Nothing about the schema, the views, the funnel or the invariants changes. This decision is entirely above the data layer.
+
 # Open items
 
 | Item | Status | Resolution path |

@@ -136,6 +136,7 @@ struct TransactionFormView: View {
                 }
             }
             .navigationTitle(editing == nil ? "New transaction" : "Edit transaction")
+            .themedForm()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
