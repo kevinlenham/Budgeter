@@ -56,6 +56,7 @@ struct LimitEditorView: View {
                 }
             }
             .navigationTitle(line.categoryName)
+            .themedForm()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -136,6 +137,7 @@ struct OverallLimitEditorView: View {
                 }
             }
             .navigationTitle("Overall budget")
+            .themedForm()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }

@@ -58,6 +58,7 @@ struct CategoriesView: View {
             }
         }
         .navigationTitle("Categories")
+        .themedForm()
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {

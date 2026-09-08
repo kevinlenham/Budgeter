@@ -99,6 +99,7 @@ struct OnboardingView: View {
                 }
             }
             .navigationTitle("Set up Budgeter")
+            .themedForm()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Start", action: finish)
