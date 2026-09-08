@@ -248,8 +248,8 @@ struct ThemedForm: ViewModifier {
     // highlights that come with the stock background.
 }
 
-// Not `nonisolated`: these build `ViewModifier` values, which are MainActor under
-// this target's default isolation, and they are only ever called from a view body.
+/// Not `nonisolated`: these build `ViewModifier` values, which are MainActor under
+/// this target's default isolation, and they are only ever called from a view body.
 extension View {
     func screenBackground() -> some View {
         modifier(ScreenBackground())

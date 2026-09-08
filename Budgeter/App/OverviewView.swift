@@ -189,7 +189,9 @@ nonisolated struct OverviewSnapshot: Equatable, Sendable {
     /// back to what the period has actually netted, and the label changes to match
     /// rather than calling a different quantity by the same name.
     var headline: Money? {
-        if let remaining = overall?.remaining { return remaining }
+        if let remaining = overall?.remaining {
+            return remaining
+        }
         guard let income, let expenses else { return nil }
         return try? income.subtracting(expenses)
     }

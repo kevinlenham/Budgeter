@@ -89,7 +89,11 @@ struct SpendSummaryCard: View {
             }
         }
         .contentShape(.rect)
-        .onTapGesture { if snapshot.isPeriodScale { onSetBudget() } }
+        .onTapGesture {
+            if snapshot.isPeriodScale {
+                onSetBudget()
+            }
+        }
     }
 
     private func remainingText(_ overall: OverallBudgetLine) -> String {

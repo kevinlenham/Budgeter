@@ -20,7 +20,9 @@ struct ChartLegendItem: Identifiable {
     var dashed = false
 
     /// The label is the identity: no chart shows the same series twice.
-    var id: String { label }
+    var id: String {
+        label
+    }
 }
 
 /// A written legend. Charts with more than one series always carry one, so nothing

@@ -105,7 +105,9 @@ nonisolated struct FinancesSnapshot: Equatable, Sendable {
     /// so tapping it opens the editor to set one rather than doing nothing.
     func budgetLine(for row: CategorySpend) -> BudgetLine? {
         guard isPeriodScale, let categoryId = row.categoryId, let currency else { return nil }
-        if let existing = limits[categoryId] { return existing }
+        if let existing = limits[categoryId] {
+            return existing
+        }
         return BudgetLine(
             categoryId: categoryId,
             categoryName: row.displayName,

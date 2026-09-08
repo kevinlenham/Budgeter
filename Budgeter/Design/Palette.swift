@@ -43,7 +43,7 @@ nonisolated enum Palette {
     static let textTertiary = Color(light: 0x8B909A, dark: 0x6B7280)
 
     // MARK: - Semantic roles
-    //
+
     // These four carry meaning and are never reused as decoration. Money in is
     // green wherever it appears; a category tile does not get to borrow it.
 

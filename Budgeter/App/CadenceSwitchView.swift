@@ -322,7 +322,7 @@ private struct CadenceSwitchConfirmation: View {
             collected[line.categoryID] = amount
         }
         let limits = collected
-        let plan = self.plan
+        let plan = plan
 
         Task {
             do {

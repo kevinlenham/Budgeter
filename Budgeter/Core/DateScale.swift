@@ -27,7 +27,9 @@ nonisolated enum DateScale: String, CaseIterable, Identifiable, Sendable {
     case week
     case period
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     /// What the segment reads. The period segment borrows the cadence's name,
     /// because "Period" is jargon and "Fortnight" is not.

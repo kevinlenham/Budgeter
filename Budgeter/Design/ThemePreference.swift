@@ -21,7 +21,9 @@ nonisolated enum ThemePreference: String, CaseIterable, Identifiable, Sendable {
     case light
     case system
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
 
     var title: String {
         switch self {
